@@ -3,3 +3,4 @@ __pycache__/
 *.pdf
 *.docx
 my-fonts/
+tests/.xsd/

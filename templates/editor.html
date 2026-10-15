@@ -5,8 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>แก้ไข PDF (ภาษาไทย)</title>
 <style>
-  @font-face { font-family: "NotoTH"; src: url("/static/fonts/NotoSansThai-Regular.ttf"); }
-  @font-face { font-family: "NotoTH"; src: url("/static/fonts/NotoSansThai-Bold.ttf"); font-weight: bold; }
+  @font-face { font-family: "SarabunTH"; src: url("/static/fonts/SarabunTHCompat-Regular.ttf?v=3"); font-weight: 400; font-style: normal; }
+  @font-face { font-family: "SarabunTH"; src: url("/static/fonts/SarabunTHCompat-Bold.ttf?v=3"); font-weight: 700; font-style: normal; }
+  @font-face { font-family: "SarabunTH"; src: url("/static/fonts/SarabunTHCompat-Italic.ttf?v=3"); font-weight: 400; font-style: italic; }
+  @font-face { font-family: "SarabunTH"; src: url("/static/fonts/SarabunTHCompat-BoldItalic.ttf?v=3"); font-weight: 700; font-style: italic; }
+  @font-face { font-family: "NotoTH"; src: url("/static/fonts/NotoSansThai-Regular.ttf?v=3"); font-weight: 400; }
+  @font-face { font-family: "NotoTH"; src: url("/static/fonts/NotoSansThai-Bold.ttf?v=3"); font-weight: 700; }
   :root {
     --bg: #eef0f3; --panel: #fff; --text: #1d2330; --muted: #6b7280; --line: #dfe3e8;
     --accent: #2563eb; --accent-soft: #e8efff; --danger: #dc2626; --ok: #15803d;
@@ -83,8 +87,12 @@
   .obj .rs { right: -6px; bottom: -6px; width: 12px; height: 12px; background: var(--accent);
     border-radius: 3px; cursor: nwse-resize; }
   .obj .txt { width: 100%; height: 100%; outline: none; white-space: pre-wrap; word-break: break-word;
-    font-family: "NotoTH", sans-serif; line-height: 1.25; overflow: hidden; }
-  .obj.t-edit_text .txt { background: #fff; line-height: 1.15; }
+    font-family: "SarabunTH", "Sarabun", sans-serif; overflow: visible; }
+  .obj.fam-noto .txt { font-family: "NotoTH", "Noto Sans Thai", sans-serif; }
+  .obj.t-edit_text { width: auto !important; height: auto !important; }
+  .obj.t-edit_text .txt { white-space: pre; min-width: 8px; }
+  .obj.t-edit_text.sel { outline: 1px dashed var(--accent); outline-offset: 2px; }
+  .obj.t-text { outline: 1px dashed rgba(37,99,235,.35); }
   .obj.t-text .txt { cursor: move; }
   .obj.t-text.editing .txt, .obj.t-edit_text .txt { cursor: text; }
   .obj.t-image img { width: 100%; height: 100%; display: block; pointer-events: none; }
@@ -157,7 +165,9 @@
   <button class="tool" data-tool="rect">กรอบ</button>
   <button class="tool" data-tool="line">เส้น</button>
   <div class="props">
-    <label>ขนาด <input type="number" id="pSize" value="14" min="4" max="200" step="0.5"></label>
+    <label>ฟอนต์ <select id="pFont" style="padding:3px 5px;border:1px solid var(--line);border-radius:6px;background:var(--panel)">
+      <option value="sarabun">Sarabun (แบบ TH Sarabun)</option><option value="noto">Noto Sans Thai</option></select></label>
+    <label>ขนาด <input type="number" id="pSize" value="16" min="4" max="200" step="0.5"></label>
     <label>สี <input type="color" id="pColor" value="#000000"></label>
     <button class="btn fmt" id="pBold" title="ตัวหนา"><b>B</b></button>
     <button class="btn fmt" id="pItalic" title="ตัวเอียง"><i>I</i></button>
@@ -241,6 +251,7 @@ let D = null;               // ข้อมูลเอกสาร {id, name, v
 let zoom = 1, tool = "select", sel = null, nextId = 1;
 let objs = [];              // การแก้ไขที่ยังไม่บันทึก
 const lineCache = {};       // บรรทัดข้อความของแต่ละหน้า (แก้ข้อความ)
+let METRICS = { sarabun: { asc: 0.85, desc: 0.25, gap: 0.03 }, noto: { asc: 1.061, desc: 0.45, gap: 0 } };
 const fmt = { bold: false, italic: false, underline: false };
 
 /* ---------------- utilities ---------------- */
@@ -290,6 +301,7 @@ function setDoc(info) {
   render();
 }
 function render() {
+  objs.forEach(syncRuns);
   const pages = $("#pages"); pages.innerHTML = "";
   const thumbs = $("#thumbs"); thumbs.innerHTML = "";
   const dpr = window.devicePixelRatio || 1;
@@ -299,7 +311,7 @@ function render() {
     el.style.width = p.w * S() + "px"; el.style.height = p.h * S() + "px";
     const rs = Math.min(4, S() * dpr).toFixed(2);
     el.innerHTML = `<span class="page-label">${i + 1}</span>
-      <img class="bg" loading="lazy" src="/api/doc/${D.id}/page/${i}.png?scale=${rs}&v=${D.version}">
+      <img class="bg" loading="lazy" src="${bgUrl(i, rs)}">
       <div class="layer"></div>`;
     pages.appendChild(el);
     bindLayer(el.querySelector(".layer"), i);
@@ -323,6 +335,18 @@ function updateButtons() {
   if (D) { $("#bUndo").disabled = !D.can_undo && !objs.length; $("#bRedo").disabled = !D.can_redo || objs.length > 0; }
 }
 const layerOf = p => document.querySelector(`.page[data-page="${p}"] .layer`);
+function hiddenLines(p) { return objs.filter(o => o.type === "edit_text" && o.page === p).map(o => o.idx).sort((a, b) => a - b); }
+function bgUrl(p, rs) {
+  rs = rs || Math.min(4, S() * (window.devicePixelRatio || 1)).toFixed(2);
+  const h = hiddenLines(p);
+  return `/api/doc/${D.id}/page/${p}.png?scale=${rs}&v=${D.version}` + (h.length ? `&hide=${h.join(",")}` : "");
+}
+function refreshBg(p) {          // แสดงหน้าโดยซ่อนบรรทัดที่กำลังแก้ (ผลเหมือนตอนบันทึกจริง)
+  const img = document.querySelector(`.page[data-page="${p}"] img.bg`); if (!img) return;
+  const url = bgUrl(p), pre = new Image();
+  pre.onload = () => { img.src = url; };
+  pre.src = url;
+}
 
 /* ---------------- tools ---------------- */
 function setTool(t) {
@@ -346,13 +370,16 @@ function setTool(t) {
 $$(".tool").forEach(b => b.addEventListener("click", () => setTool(b.dataset.tool)));
 
 async function loadLines(p) {
-  if (!lineCache[p]) lineCache[p] = await api(`/api/doc/${D.id}/lines/${p}`).then(r => r.json());
+  if (!lineCache[p]) {
+    const data = await api(`/api/doc/${D.id}/lines/${p}`).then(r => r.json());
+    lineCache[p] = data.lines; if (data.metrics) METRICS = data.metrics;
+  }
   const layer = layerOf(p); if (!layer) return;
   layer.querySelectorAll(".hit").forEach(h => h.remove());
   lineCache[p].forEach((ln, idx) => {
     const [x0, y0, x1, y1] = ln.bbox;
     const h = document.createElement("div");
-    h.className = "hit"; h.dataset.idx = idx;
+    h.className = "hit"; h.dataset.idx = idx; h.title = ln.font || "";
     if (objs.some(o => o.type === "edit_text" && o.page === p && o.idx === idx)) h.classList.add("done");
     Object.assign(h.style, { left: x0 * S() + "px", top: y0 * S() + "px",
       width: (x1 - x0) * S() + "px", height: (y1 - y0) * S() + "px" });
@@ -364,9 +391,10 @@ function loadAllLines() { D.pages.forEach((_, i) => loadLines(i).catch(e => toas
 
 function startEditLine(p, idx, hitEl) {
   const ln = lineCache[p][idx];
-  const o = { id: nextId++, type: "edit_text", page: p, idx, bbox: ln.bbox.slice(), orig: ln.text, text: ln.text,
-    size: ln.size, fit: ln.fit, bold: ln.bold, italic: ln.italic, underline: false, color: ln.color === "#000000" ? "#000000" : ln.color };
-  objs.push(o); drawObj(o); hitEl.classList.add("done");
+  const o = { id: nextId++, type: "edit_text", page: p, idx, bbox: ln.bbox.slice(), x: ln.x, baseline: ln.baseline,
+    size: ln.size, fit: ln.fit, family: ln.family, color: ln.color, runs: JSON.parse(JSON.stringify(ln.runs)) };
+  o.origKey = runsKey(o);
+  objs.push(o); drawObj(o); hitEl.classList.add("done"); refreshBg(p);
   const t = o.el.querySelector(".txt"); t.focus(); placeCaretEnd(t); select(o); updateButtons();
 }
 function placeCaretEnd(el) {
@@ -374,11 +402,63 @@ function placeCaretEnd(el) {
   const s = getSelection(); s.removeAllRanges(); s.addRange(r);
 }
 
+/* ---------------- rich text (ส่วนตัวหนา/ธรรมดา/สี ภายในบรรทัด) ---------------- */
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function runsKey(o) { return JSON.stringify([o.runs.map(r => [r.text, !!r.bold, !!r.italic, !!r.underline, r.color, r.size]), o.fit, o.family]); }
+function runsToHtml(o) {
+  return o.runs.map(r => {
+    const st = [`font-weight:${r.bold ? 700 : 400}`, `font-style:${r.italic ? "italic" : "normal"}`];
+    if (r.underline) st.push("text-decoration:underline");
+    if (r.color) st.push(`color:${r.color}`);
+    if (o.type === "edit_text" && r.size && Math.abs(r.size - o.size) > 0.05) st.push(`font-size:${(r.size / o.size).toFixed(4)}em`);
+    return `<span data-size="${r.size || ""}" style="${st.join(";")}">${esc(r.text).replace(/\n/g, "<br>")}</span>`;
+  }).join("");
+}
+function rgbHex(c) {
+  const m = c.match(/\d+(\.\d+)?/g); if (!m) return "#000000";
+  return "#" + m.slice(0, 3).map(v => (+v | 0).toString(16).padStart(2, "0")).join("");
+}
+function domRuns(o) {
+  const root = o.el && o.el.querySelector(".txt"); if (!root) return o.runs;
+  const runs = [];
+  const push = (text, st) => {
+    if (!text) return;
+    const last = runs[runs.length - 1];
+    if (last && last.bold === st.bold && last.italic === st.italic && last.underline === st.underline &&
+        last.color === st.color && last.size === st.size) last.text += text;
+    else runs.push({ text, ...st });
+  };
+  const styleOf = el => {
+    const cs = getComputedStyle(el);
+    let u = false;
+    for (let e = el; e && e !== root.parentElement; e = e.parentElement)
+      if ((getComputedStyle(e).textDecorationLine || "").includes("underline")) { u = true; break; }
+    const ds = el.closest("[data-size]");
+    return { bold: (+cs.fontWeight || 400) >= 600, italic: cs.fontStyle === "italic", underline: u, color: rgbHex(cs.color),
+      size: o.type === "edit_text" ? ((ds && +ds.dataset.size) || o.size) : o.size };
+  };
+  const walk = node => {
+    for (const n of node.childNodes) {
+      if (n.nodeType === 3) push(n.nodeValue.replace(/ /g, " ").replace(/​/g, ""), styleOf(n.parentElement));
+      else if (n.nodeName === "BR") { if (o.type === "text") push("\n", styleOf(node.nodeType === 1 ? node : root)); }
+      else if (n.nodeType === 1) {
+        if ((n.nodeName === "DIV" || n.nodeName === "P") && runs.length && o.type === "text") push("\n", styleOf(n));
+        walk(n);
+      }
+    }
+  };
+  walk(root);
+  if (o.type === "edit_text") runs.forEach(r => r.text = r.text.replace(/\n/g, " "));
+  return runs.length ? runs : [{ text: "", bold: false, italic: false, underline: false, color: o.color, size: o.size }];
+}
+function syncRuns(o) { if ((o.type === "text" || o.type === "edit_text") && o.el) o.runs = domRuns(o); }
+
 /* ---------------- objects ---------------- */
 function rectOf(o) { return o.type === "edit_text" ? o.bbox : o.rect; }
 function drawObj(o) {
   const layer = layerOf(o.page); if (!layer) return;
   if (o.el) o.el.remove();
+  if (o.svg) o.svg.remove();
   if (o.type === "ink" || o.type === "line") {
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.classList.add("ink"); svg.setAttribute("viewBox", `0 0 ${D.pages[o.page].w} ${D.pages[o.page].h}`);
@@ -386,7 +466,6 @@ function drawObj(o) {
     const paths = o.type === "line" ? [o.points] : o.paths;
     svg.innerHTML = paths.map(pts => `<polyline fill="none" stroke="${o.color}" stroke-width="${o.width}"
       stroke-linecap="round" stroke-linejoin="round" points="${pts.map(q => q.join(",")).join(" ")}"/>`).join("");
-    // กล่องสำหรับเลือก/ลบ
     const xs = paths.flat().map(q => q[0]), ys = paths.flat().map(q => q[1]);
     o.rect = [Math.min(...xs) - 3, Math.min(...ys) - 3, Math.max(...xs) + 3, Math.max(...ys) + 3];
     const box = document.createElement("div"); box.className = "obj t-" + o.type;
@@ -395,13 +474,22 @@ function drawObj(o) {
     o.el = box; o.svg = svg; positionObj(o); bindObj(o);
     return;
   }
-  const el = document.createElement("div"); el.className = "obj t-" + o.type; o.el = el;
+  const el = document.createElement("div"); el.className = "obj t-" + o.type + (o.family === "noto" ? " fam-noto" : ""); o.el = el;
   if (o.type === "text" || o.type === "edit_text") {
-    el.innerHTML = `<div class="txt" contenteditable="true" spellcheck="false"></div>`;
-    const t = el.querySelector(".txt"); t.innerText = o.text;
-    t.addEventListener("input", () => { o.text = t.innerText.replace(/\n$/, ""); if (o.type === "text") autoGrow(o); });
+    el.innerHTML = `<div class="txt" contenteditable="true" spellcheck="false">${runsToHtml(o)}</div>`;
+    const t = el.querySelector(".txt");
+    t.addEventListener("input", () => { if (o.type === "text") autoGrow(o); });
+    t.addEventListener("keydown", e => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (o.type === "edit_text") t.blur(); else document.execCommand("insertLineBreak");
+      }
+    });
+    t.addEventListener("paste", e => {                  // วางเป็นข้อความล้วน
+      e.preventDefault(); document.execCommand("insertText", false, (e.clipboardData.getData("text/plain") || "").replace(o.type === "edit_text" ? /\s*\n\s*/g : /\r/g, o.type === "edit_text" ? " " : ""));
+    });
     t.addEventListener("focus", () => { select(o); el.classList.add("editing"); });
-    t.addEventListener("blur", () => el.classList.remove("editing"));
+    t.addEventListener("blur", () => { el.classList.remove("editing"); syncRuns(o); updateButtons(); });
     styleText(o);
   } else if (o.type === "image") {
     el.innerHTML = `<img src="${o.data}">`;
@@ -416,32 +504,38 @@ function drawObj(o) {
     (o.type === "edit_text" ? "" : `<div class="rs" title="ปรับขนาด"></div>`));
   layer.appendChild(el); positionObj(o); bindObj(o);
 }
+function fontSizePt(o) { return o.type === "edit_text" ? o.size * o.fit : o.size; }
 function styleText(o) {
-  const t = o.el.querySelector(".txt");
-  const size = o.type === "edit_text" ? o.size * o.fit : o.size;
-  Object.assign(t.style, { fontSize: size * S() + "px", color: o.color, fontWeight: o.bold ? "bold" : "normal",
-    fontStyle: o.italic ? "italic" : "normal", textDecoration: o.underline ? "underline" : "none",
-    textAlign: o.align || "left" });
+  const t = o.el.querySelector(".txt"), m = METRICS[o.family || "sarabun"] || METRICS.sarabun;
+  Object.assign(t.style, { fontSize: fontSizePt(o) * S() + "px", lineHeight: (m.asc + m.desc + m.gap).toFixed(4),
+    color: o.color, textAlign: o.align || "left" });
+  if (o.type === "edit_text") positionObj(o);
 }
 function positionObj(o) {
+  if (o.type === "edit_text") {          // วางให้เส้นฐานตรงกับต้นฉบับพอดี
+    const m = METRICS[o.family || "sarabun"] || METRICS.sarabun, fs = fontSizePt(o);
+    const top = o.baseline - fs * (m.gap / 2 + m.asc);
+    Object.assign(o.el.style, { left: o.x * S() + "px", top: top * S() + "px" });
+    return;
+  }
   const [x0, y0, x1, y1] = rectOf(o);
-  let w = x1 - x0, h = y1 - y0;
-  if (o.type === "edit_text") { w = Math.max(w, 30); }
-  Object.assign(o.el.style, { left: x0 * S() + "px", top: y0 * S() + "px", width: w * S() + "px",
-    height: (o.type === "edit_text" ? "auto" : h * S() + "px"), minHeight: h * S() + "px" });
-  if (o.type === "edit_text") o.el.style.minWidth = w * S() + "px";
+  Object.assign(o.el.style, { left: x0 * S() + "px", top: y0 * S() + "px", width: (x1 - x0) * S() + "px",
+    height: (y1 - y0) * S() + "px" });
 }
 function autoGrow(o) {
   const t = o.el.querySelector(".txt");
   const need = t.scrollHeight / S();
-  if (need > o.rect[3] - o.rect[1]) { o.rect[3] = o.rect[1] + need + 2; positionObj(o); }
+  if (need > o.rect[3] - o.rect[1] + 0.5) { o.rect[3] = o.rect[1] + need + 1; positionObj(o); }
 }
 function select(o) {
   if (sel && sel.el) sel.el.classList.remove("sel");
   sel = o; if (o && o.el) o.el.classList.add("sel");
   if (o && (o.type === "text" || o.type === "edit_text")) {
-    $("#pSize").value = +(o.type === "edit_text" ? o.size * o.fit : o.size).toFixed(1);
-    $("#pColor").value = o.color; setFmt("bold", !!o.bold); setFmt("italic", !!o.italic); setFmt("underline", !!o.underline);
+    $("#pSize").value = +fontSizePt(o).toFixed(1);
+    $("#pColor").value = o.color || "#000000";
+    $("#pFont").value = o.family || "sarabun";
+    const r = (o.runs && o.runs[0]) || {};
+    setFmt("bold", !!r.bold); setFmt("italic", !!r.italic); setFmt("underline", !!r.underline);
   }
 }
 function removeObj(o) {
@@ -449,6 +543,7 @@ function removeObj(o) {
   objs = objs.filter(x => x !== o);
   if (o.type === "edit_text") {
     const h = layerOf(o.page)?.querySelector(`.hit[data-idx="${o.idx}"]`); if (h) h.classList.remove("done");
+    refreshBg(o.page);
   }
   if (sel === o) sel = null; updateButtons();
 }
@@ -459,10 +554,10 @@ function bindObj(o) {
     if (ev.target.classList.contains("del")) return;
     ev.stopPropagation(); select(o);
     const isResize = ev.target.classList.contains("rs");
-    const editingText = ev.target.classList.contains("txt") && (o.type === "edit_text" || el.classList.contains("editing"));
-    if (editingText) return;
+    const inText = !!ev.target.closest(".txt");
+    if (inText && (o.type === "edit_text" || el.classList.contains("editing"))) return;
     if (o.type === "edit_text" && !isResize) return;
-    if (ev.target.classList.contains("txt") && o.type === "text" && ev.detail >= 2) return;
+    if (inText && o.type === "text" && ev.detail >= 2) return;
     ev.preventDefault();
     const sx = ev.clientX, sy = ev.clientY, r0 = rectOf(o).slice(), pts0 = JSON.stringify(o.paths || o.points || null);
     const move = e => {
@@ -478,7 +573,7 @@ function bindObj(o) {
       }
       if (o.svg) { const s = o.el.classList.contains("sel"); drawObj(o); if (s) select(o); } else positionObj(o);
     };
-    const up = () => { removeEventListener("pointermove", move); removeEventListener("pointerup", up); };
+    const up = () => { removeEventListener("pointermove", move); removeEventListener("pointerup", up); if (o.type === "text") autoGrow(o); };
     addEventListener("pointermove", move); addEventListener("pointerup", up);
   });
   if (o.type === "text") {
@@ -495,9 +590,11 @@ function bindLayer(layer, p) {
     const [x, y] = pt(ev);
     select(null);
     if (tool === "addtext") {
-      const size = +$("#pSize").value || 14;
-      const o = { id: nextId++, type: "text", page: p, rect: [x, y - size * 0.7, Math.min(x + 220, D.pages[p].w - 10), y + size * 0.9],
-        text: "", size, color: $("#pColor").value, ...fmt, align: "left" };
+      const size = +$("#pSize").value || 16, family = $("#pFont").value || "sarabun";
+      const m = METRICS[family], lh = (m.asc + m.desc + m.gap) * size;
+      const o = { id: nextId++, type: "text", page: p, rect: [x, y - lh * 0.75, Math.min(x + 240, D.pages[p].w - 10), y + lh * 0.25],
+        size, family, color: $("#pColor").value, align: "left",
+        runs: [{ text: "", bold: fmt.bold, italic: fmt.italic, underline: fmt.underline, color: $("#pColor").value, size }] };
       objs.push(o); drawObj(o); select(o); updateButtons();
       setTimeout(() => o.el.querySelector(".txt").focus(), 0);
       return;
@@ -542,19 +639,47 @@ function bindLayer(layer, p) {
 
 /* ---------------- property bar ---------------- */
 function setFmt(k, v) { fmt[k] = v; $({ bold: "#pBold", italic: "#pItalic", underline: "#pUnder" }[k]).classList.toggle("on", v); }
+function textObjSelection() {      // ช่วงที่เลือกภายในข้อความของวัตถุที่เลือกอยู่ (ถ้ามี)
+  if (!sel || !(sel.type === "text" || sel.type === "edit_text") || !sel.el) return null;
+  const t = sel.el.querySelector(".txt"), s = getSelection();
+  if (s.rangeCount && !s.isCollapsed && t.contains(s.anchorNode) && t.contains(s.focusNode)) return t;
+  return null;
+}
+function applyStyle(cmd, value) {  // ตัวหนา/เอียง/ขีดเส้นใต้/สี: เฉพาะส่วนที่เลือก หรือทั้งข้อความถ้าไม่ได้เลือก
+  if (!sel || !(sel.type === "text" || sel.type === "edit_text")) return false;
+  const t = sel.el.querySelector(".txt");
+  let whole = false;
+  if (!textObjSelection()) {
+    const r = document.createRange(); r.selectNodeContents(t);
+    const s = getSelection(); s.removeAllRanges(); s.addRange(r); whole = true;
+  }
+  document.execCommand("styleWithCSS", false, true);
+  document.execCommand(cmd, false, value);
+  if (whole) getSelection().collapseToEnd();
+  syncRuns(sel); updateButtons();
+  return true;
+}
 [["#pBold", "bold"], ["#pItalic", "italic"], ["#pUnder", "underline"]].forEach(([id, k]) =>
   $(id).addEventListener("mousedown", ev => {
-    ev.preventDefault(); setFmt(k, !fmt[k]);
-    if (sel && (sel.type === "text" || sel.type === "edit_text")) { sel[k] = fmt[k]; styleText(sel); }
+    ev.preventDefault();
+    if (!applyStyle(k)) setFmt(k, !fmt[k]);
+    else if (sel) { const r = sel.runs[0] || {}; setFmt(k, !!r[k]); }
   }));
 $("#pSize").addEventListener("input", () => {
   const v = +$("#pSize").value; if (!sel || !v) return;
-  if (sel.type === "text") { sel.size = v; styleText(sel); autoGrow(sel); }
+  if (sel.type === "text") { syncRuns(sel); sel.size = v; sel.runs.forEach(r => r.size = v); styleText(sel); autoGrow(sel); }
   if (sel.type === "edit_text") { sel.fit = v / sel.size; styleText(sel); }
+  updateButtons();
 });
 $("#pColor").addEventListener("input", () => {
-  if (!sel) return; sel.color = $("#pColor").value;
-  if (sel.type === "text" || sel.type === "edit_text") styleText(sel); else drawObj(sel), select(sel);
+  if (!sel) return;
+  if (sel.type === "text" || sel.type === "edit_text") { applyStyle("foreColor", $("#pColor").value); if (!textObjSelection()) sel.color = $("#pColor").value; return; }
+  sel.color = $("#pColor").value; drawObj(sel); select(sel);
+});
+$("#pFont").addEventListener("change", () => {
+  if (sel && (sel.type === "text" || sel.type === "edit_text")) {
+    syncRuns(sel); sel.family = $("#pFont").value; drawObj(sel); select(sel); updateButtons();
+  }
 });
 $("#pWidth").addEventListener("input", () => {
   if (sel && ["ink", "rect", "line"].includes(sel.type)) { sel.width = +$("#pWidth").value || 1; drawObj(sel); select(sel); }
@@ -613,10 +738,12 @@ $("#sigOk").onclick = () => {
 
 /* ---------------- save / undo ---------------- */
 function toOps() {
-  return objs.filter(o => !(o.type === "edit_text" && o.text === o.orig && !o.dirtyStyle && o.fit === lineCache[o.page]?.[o.idx]?.fit
-      && o.color === lineCache[o.page]?.[o.idx]?.color && o.bold === lineCache[o.page]?.[o.idx]?.bold && !o.italic && !o.underline))
+  objs.forEach(syncRuns);
+  return objs.filter(o => !(o.type === "edit_text" && runsKey(o) === o.origKey))
+    .filter(o => !(o.type === "text" && !o.runs.some(r => r.text.trim())))
     .map(o => {
-      const { el, svg, id, idx, orig, ...rest } = o;
+      const { el, svg, id, idx, origKey, ...rest } = o;
+      if (rest.type === "edit_text" || rest.type === "text") rest.text = rest.runs.map(r => r.text).join("");
       return rest;
     });
 }

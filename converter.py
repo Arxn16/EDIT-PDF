@@ -20,6 +20,10 @@ from docx.oxml.ns import qn
 from docx.shared import Emu, Pt
 from pdf2docx import Converter
 
+from docx_fix import embed_fonts, fix_table_outdent, normalize_ooxml, sanitize_ooxml
+
+DEFAULT_FONT = "Sarabun TH Compat"     # ขนาดเท่า TH Sarabun New และฝังในไฟล์ได้ (แสดงถูกทุกเครื่อง)
+
 # ---------------------------------------------------------------------------
 # ซ่อมข้อความภาษาไทย
 # ---------------------------------------------------------------------------
@@ -177,11 +181,45 @@ def _child(parent, tag):
     return el
 
 
+def _hf_roots(doc):
+    """หัว/ท้ายกระดาษที่มีอยู่จริงในไฟล์ (ห้ามใช้ section.header._element ตรงๆ: python-docx จะสร้าง
+    หัวกระดาษว่างใหม่ให้ ทำให้เนื้อหาถูกดันลงและล้นไปหน้าใหม่)"""
+    out, seen = [], set()
+    for s in doc.sections:
+        for hf in (s.header, s.footer, s.first_page_header, s.first_page_footer,
+                   s.even_page_header, s.even_page_footer):
+            try:
+                if hf.is_linked_to_previous:
+                    continue
+                part = hf._get_or_add_definition()
+            except Exception:  # noqa: BLE001
+                continue
+            if id(part) not in seen:
+                seen.add(id(part))
+                out.append(part.element)
+    return out
+
+
+def finalize_docx(doc):
+    """ขั้นสุดท้ายก่อนบันทึก: ตารางอยู่ตำแหน่งเดียวกับ PDF + ลำดับ element ตามมาตรฐานที่ Word ต้องการ"""
+    styles = doc.styles.element
+    for root in [doc.element.body] + _hf_roots(doc):
+        fix_table_outdent(root, styles)
+        sanitize_ooxml(root)
+        normalize_ooxml(root)
+    sanitize_ooxml(styles)
+    normalize_ooxml(styles)
+    try:                                      # แม่แบบของ python-docx ไม่มี w:percent (บังคับตามมาตรฐาน)
+        zoom = doc.settings.element.find(qn("w:zoom"))
+        if zoom is not None and zoom.get(qn("w:percent")) is None:
+            zoom.set(qn("w:percent"), "100")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def apply_thai_font(doc: Document, font: str):
     """font = ชื่อฟอนต์ หรือ 'original' เพื่อใช้ฟอนต์เดิมจาก PDF"""
-    roots = [doc.element.body]
-    for s in doc.sections:
-        roots += [s.header._element, s.footer._element]
+    roots = [doc.element.body] + _hf_roots(doc)
 
     def fix_rpr(rpr):
         fonts = _child(rpr, "w:rFonts")
@@ -312,13 +350,429 @@ def _keep_thai_digits(root, target_font):
                     t.text = t.text.translate(THAI_DIGITS)
 
 
+# ---------------------------------------------------------------------------
+# เส้นที่ pdf2docx ทำหาย (เส้นประเติมข้อความในแบบฟอร์ม, เส้นคั่น, กรอบที่ไม่ใช่ตาราง)
+# ---------------------------------------------------------------------------
+
+def _pdf_segments(page):
+    """เส้นตรงแนวนอน/แนวตั้งทั้งหมดในหน้า (รวมเส้นที่วาดเป็นสี่เหลี่ยมบาง ๆ แบบที่ Word ส่งออก)"""
+    segs = []
+    for d in page.get_drawings():
+        color, fill = d.get("color"), d.get("fill")
+        width = d.get("width") or 0.5
+        dashes = d.get("dashes") or ""
+        dash = dashes not in ("", "[] 0", "[] 0.0")
+        for it in d["items"]:
+            if it[0] == "l" and color is not None:
+                p1, p2 = it[1], it[2]
+                if abs(p1.y - p2.y) < 0.8 and abs(p1.x - p2.x) > 2:
+                    segs.append(["h", min(p1.x, p2.x), max(p1.x, p2.x), (p1.y + p2.y) / 2, width, color, dash, dashes])
+                elif abs(p1.x - p2.x) < 0.8 and abs(p1.y - p2.y) > 2:
+                    segs.append(["v", min(p1.y, p2.y), max(p1.y, p2.y), (p1.x + p2.x) / 2, width, color, dash, dashes])
+            elif it[0] == "re":
+                r = fitz.Rect(it[1])
+                if fill is not None and "f" in (d.get("type") or ""):
+                    if r.height <= 2.5 and r.width > 2.5:
+                        segs.append(["h", r.x0, r.x1, (r.y0 + r.y1) / 2, max(r.height, 0.25), fill, False, ""])
+                    elif r.width <= 2.5 and r.height > 2.5:
+                        segs.append(["v", r.y0, r.y1, (r.x0 + r.x1) / 2, max(r.width, 0.25), fill, False, ""])
+                if color is not None and "s" in (d.get("type") or "") and r.width > 2.5 and r.height > 2.5:
+                    for sg in (["h", r.x0, r.x1, r.y0], ["h", r.x0, r.x1, r.y1], ["v", r.y0, r.y1, r.x0], ["v", r.y0, r.y1, r.x1]):
+                        segs.append(sg + [width, color, dash, dashes])
+    # รวมเส้นที่ต่อกัน (Word วาดเส้นตารางเป็นชิ้นเล็ก ๆ หลายชิ้น)
+    segs.sort(key=lambda s: (s[0], round(s[3] * 2), s[1]))
+    merged = []
+    for sg in segs:
+        m = merged[-1] if merged else None
+        if m and m[0] == sg[0] and abs(m[3] - sg[3]) < 0.6 and sg[1] <= m[2] + 1.5 and m[6] == sg[6] \
+                and tuple(m[5]) == tuple(sg[5]):
+            m[2] = max(m[2], sg[2])
+        else:
+            merged.append(list(sg))
+    return merged
+
+
+def _table_segments(blocks, out):
+    for b in blocks:
+        for r in b.get("rows", []):
+            for c in r.get("cells", []):
+                if not c or not c.get("bbox"):                # ช่องที่ถูกผสาน (pdf2docx ไม่มีกรอบ)
+                    continue
+                x0, y0, x1, y1 = c["bbox"]
+                bw = c.get("border_width") or (0, 0, 0, 0)
+                for side, wd in zip(("top", "right", "bottom", "left"), bw):
+                    if wd and wd > 0:
+                        out.append({"top": ("h", x0, x1, y0), "bottom": ("h", x0, x1, y1),
+                                    "left": ("v", y0, y1, x0), "right": ("v", y0, y1, x1)}[side])
+                _table_segments(c.get("blocks", []), out)
+        _table_segments(b.get("blocks", []), out)
+
+
+def _covered(seg, tsegs):
+    o, a, b, pos = seg[:4]
+    need = (b - a) * 0.7
+    got = 0.0
+    for t in tsegs:
+        if t[0] == o and abs(t[3] - pos) <= 2.5:
+            got += max(0.0, min(b, t[2]) - max(a, t[1]))
+    return got >= need
+
+
+def _is_text_decoration(seg, lines):
+    """เส้นใต้/ขีดฆ่าตัวอักษร (pdf2docx แปลงเป็นรูปแบบตัวอักษรให้แล้ว)"""
+    if seg[0] != "h":
+        return False
+    a, b, y = seg[1], seg[2], seg[3]
+    for (x0, y0, x1, y1) in lines:
+        if y0 - 1 <= y <= y1 + 2.5:
+            ov = max(0.0, min(b, x1) - max(a, x0))
+            if ov >= (b - a) * 0.6:
+                return True
+    return False
+
+
+def _orphan_lines(pdf_path, parsed):
+    out = {}
+    with fitz.open(pdf_path) as pdf:
+        for i, page in enumerate(pdf):
+            tsegs = []
+            try:
+                for sec in parsed["pages"][i]["sections"]:
+                    for col in sec["columns"]:
+                        _table_segments(col["blocks"], tsegs)
+            except (KeyError, IndexError, TypeError):
+                tsegs = None
+            if tsegs is None:                                  # อ่านโครงสร้างตารางไม่ได้ -> ไม่เติมเส้น (กันเส้นซ้ำ)
+                continue
+            tl = [(tuple(l["bbox"]), "".join(sp["text"] for sp in l["spans"]))
+                  for b in page.get_text("dict")["blocks"] for l in b.get("lines", [])
+                  if any(sp["text"].strip() for sp in l["spans"])]
+            text_lines = [t[0] for t in tl]
+            orphans = [s for s in _pdf_segments(page)
+                       if (s[2] - s[1]) > 4 and not _covered(s, tsegs) and not _is_text_decoration(s, text_lines)]
+            if orphans:
+                out[i] = {"segs": orphans, "lines": tl}
+    return out
+
+
+# ---------------------------------------------------------------------------
+# เส้นคู่ (double border): pdf2docx รวมเส้นขนาน 2 เส้นเป็นเส้นเดียว -> ตั้งขอบช่องเป็นแบบเส้นคู่ของ Word
+# ---------------------------------------------------------------------------
+
+def _double_pairs(segs):
+    """เส้นขนาน 2 เส้นห่างกัน 0.9–4pt ยาวทับกัน >= 70% (เส้นคู่แบบ Word/LibreOffice)"""
+    pairs = []
+    solid = [sg for sg in segs if not sg[6] and sg[4] <= 1.6]
+    for i, a in enumerate(solid):
+        for b in solid[i + 1:]:
+            if a[0] != b[0]:
+                continue
+            d = abs(a[3] - b[3])
+            if not 0.9 <= d <= 4.0:
+                continue
+            ov = min(a[2], b[2]) - max(a[1], b[1])
+            if ov < 0.7 * min(a[2] - a[1], b[2] - b[1]):
+                continue
+            pairs.append((a[0], max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3]), max(a[3], b[3]),
+                          (a[4] + b[4]) / 2))
+    return pairs
+
+
+def _cell_sides(c):
+    x0, y0, x1, y1 = c["bbox"]
+    bw = c.get("border_width") or (0, 0, 0, 0)
+    geo = {"top": ("h", x0, x1, y0), "right": ("v", y0, y1, x1), "bottom": ("h", x0, x1, y1), "left": ("v", y0, y1, x0)}
+    return [(side, geo[side]) for side, wd in zip(("top", "right", "bottom", "left"), bw) if wd and wd > 0]
+
+
+def _tables_in_order(blocks, out):
+    """ตารางตามลำดับเดียวกับ w:tbl ใน .docx: [(ช่องที่มีกรอบ [(แถว, คอลัมน์, ช่อง)])]"""
+    for b in blocks:
+        if "rows" in b:
+            cells = []
+            out.append(cells)
+            for i, r in enumerate(b.get("rows", [])):
+                for j, c in enumerate(r.get("cells", [])):
+                    if c and c.get("bbox"):
+                        cells.append((i, j, c))
+                    if c:
+                        _tables_in_order(c.get("blocks", []), out)
+        else:
+            _tables_in_order(b.get("blocks", []), out)
+
+
+def _double_borders(pdf_path, parsed):
+    """{หน้า: {"n": จำนวนตาราง, "items": [(ตาราง, แถว, คอลัมน์, ด้าน, ขนาด, จำนวนแถวที่ผสาน)]}}"""
+    out = {}
+    with fitz.open(pdf_path) as pdf:
+        for pno, page in enumerate(pdf):
+            tables = []
+            try:
+                for sec in parsed["pages"][pno]["sections"]:
+                    for col in sec["columns"]:
+                        _tables_in_order(col["blocks"], tables)
+            except (KeyError, IndexError, TypeError):
+                continue
+            if not tables:
+                continue
+            pairs = _double_pairs(_pdf_segments(page))
+            if not pairs:
+                continue
+            tsegs = [sg for cells in tables for _, _, c in cells for _, sg in _cell_sides(c)]
+            items = []
+            for k, cells in enumerate(tables):
+                for i, j, c in cells:
+                    rowspan = (c.get("merged_cells") or (1, 1))[0] or 1
+                    for side, (o, a, b, pos) in _cell_sides(c):
+                        for po, pa, pb, lo, hi, wd in pairs:
+                            if po != o or not (lo - 1.0 <= pos <= hi + 1.0):
+                                continue
+                            if min(b, pb) - max(a, pa) < 0.7 * (b - a):
+                                continue
+                            tol = min(0.6, (hi - lo) * 0.3)
+
+                            def near(y):
+                                return any(t[0] == o and abs(t[3] - y) <= tol and
+                                           min(t[2], pb) - max(t[1], pa) > 0.5 * (pb - pa) for t in tsegs)
+                            if near(lo) and near(hi):                # 2 เส้นเป็นขอบจริงคนละช่องอยู่แล้ว
+                                continue
+                            items.append((k, i, j, side, max(2, min(96, round(wd * 8))), rowspan))
+                            break
+            if items:
+                out[pno] = {"n": len(tables), "items": items}
+    return out
+
+
+def _tc_at(tr, col):
+    start = 0
+    for tc in tr.findall(qn("w:tc")):
+        pr = tc.find(qn("w:tcPr"))
+        span = pr.find(qn("w:gridSpan")) if pr is not None else None
+        n = int(span.get(qn("w:val"), "1")) if span is not None else 1
+        if start <= col < start + n:
+            return tc
+        start += n
+    return None
+
+
+def _apply_double_borders(doc, doubles):
+    if not doubles:
+        return 0
+    pages, page = {}, 0
+    for child in doc.element.body:
+        pages.setdefault(page, []).append(child)
+        if child.tag == qn("w:p") and child.find(qn("w:pPr") + "/" + qn("w:sectPr")) is not None:
+            page += 1
+    done = 0
+    for pno, data in doubles.items():
+        tbls = [t for el in pages.get(pno, []) for t in el.iter(qn("w:tbl"))]
+        if len(tbls) != data["n"]:                             # โครงสร้างไม่ตรงกัน -> ไม่แตะ
+            continue
+        for k, i, j, side, sz, rowspan in data["items"]:
+            rows = tbls[k].findall(qn("w:tr"))
+            if side == "top":
+                targets = [i]
+            elif side == "bottom":
+                targets = [i + rowspan - 1]
+            else:
+                targets = list(range(i, i + rowspan))
+            for ri in targets:
+                tc = _tc_at(rows[ri], j) if ri < len(rows) else None
+                if tc is None:
+                    continue
+                pr = tc.find(qn("w:tcPr"))
+                if pr is None:
+                    pr = OxmlElement("w:tcPr")
+                    tc.insert(0, pr)
+                bd = pr.find(qn("w:tcBorders"))
+                if bd is None:
+                    bd = OxmlElement("w:tcBorders")
+                    pr.append(bd)
+                alt = {"left": "start", "right": "end"}.get(side)
+                el = bd.find(qn("w:" + side))
+                if el is None and alt:
+                    el = bd.find(qn("w:" + alt))
+                if el is None:
+                    el = OxmlElement("w:" + side)
+                    bd.append(el)
+                el.set(qn("w:val"), "double")
+                el.set(qn("w:sz"), str(sz))
+                el.set(qn("w:space"), "0")
+                if el.get(qn("w:color")) is None:
+                    el.set(qn("w:color"), "000000")
+                done += 1
+    return done
+
+
+_NS_A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+_NS_WP = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+_NS_WPS = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+_NS_MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+EMU = 12700
+
+
+def _line_drawing_xml(seg, shape_id, rel_line_top=None):
+    o, a, b, pos, width, color, dash, dashes = seg
+    if o == "h":
+        x, y, cx, cy = a, pos, b - a, 0
+    else:
+        x, y, cx, cy = pos, a, 0, b - a
+    vrel = "page"
+    if rel_line_top is not None:                       # ยึดกับบรรทัดข้อความ: ขยับตามข้อความถ้าเลย์เอาต์เลื่อน
+        vrel, y = "line", y - rel_line_top
+    rgb = "".join(f"{int(round(c * 255)):02X}" for c in (list(color) + [0, 0, 0])[:3])
+    dash_xml = ""
+    if dash:
+        on = re.findall(r"[\d.]+", dashes.split("]")[0]) if dashes else []
+        dotted = bool(on) and float(on[0]) <= max(1.6, width * 1.6)
+        dash_xml = f'<a:prstDash val="{"sysDot" if dotted else "dash"}"/>'
+    lw = max(int(width * EMU), 3175)
+    return (f'<mc:AlternateContent xmlns:mc="{_NS_MC}"><mc:Choice Requires="wps"><w:drawing xmlns:w="{W_NS}">'
+            f'<wp:anchor xmlns:wp="{_NS_WP}" distT="0" distB="0" distL="0" distR="0" simplePos="0" '
+            f'relativeHeight="{251658240 + shape_id}" behindDoc="1" locked="0" layoutInCell="0" allowOverlap="1">'
+            f'<wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="page"><wp:posOffset>{int(x * EMU)}</wp:posOffset>'
+            f'</wp:positionH><wp:positionV relativeFrom="{vrel}"><wp:posOffset>{int(y * EMU)}</wp:posOffset></wp:positionV>'
+            f'<wp:extent cx="{int(cx * EMU)}" cy="{int(cy * EMU)}"/><wp:effectExtent l="0" t="0" r="0" b="0"/>'
+            f'<wp:wrapNone/><wp:docPr id="{shape_id}" name="Line {shape_id}"/><wp:cNvGraphicFramePr/>'
+            f'<a:graphic xmlns:a="{_NS_A}"><a:graphicData uri="{_NS_WPS}"><wps:wsp xmlns:wps="{_NS_WPS}">'
+            f'<wps:cNvCnPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{int(cx * EMU)}" cy="{int(cy * EMU)}"/>'
+            f'</a:xfrm><a:prstGeom prst="line"><a:avLst/></a:prstGeom><a:ln w="{lw}"><a:solidFill>'
+            f'<a:srgbClr val="{rgb}"/></a:solidFill>{dash_xml}</a:ln></wps:spPr><wps:bodyPr/></wps:wsp>'
+            f'</a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice><mc:Fallback/></mc:AlternateContent>')
+
+
+W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+
+_NORM_DIGITS = str.maketrans("๐๑๒๓๔๕๖๗๘๙", "0123456789")
+
+
+def _norm(t):
+    return re.sub(r"\s+", "", fix_thai(t)).translate(_NORM_DIGITS)
+
+
+def _restore_lines(doc, orphans):
+    """ใส่เส้นที่หายกลับเป็นรูปเส้นตรง: ยึดกับบรรทัดข้อความที่อยู่เหนือเส้น (ขยับตามข้อความ)
+    ถ้าหาบรรทัดไม่เจอ ยึดกับตำแหน่งบนหน้าแทน"""
+    if not orphans:
+        return 0
+    from lxml import etree
+    body = doc.element.body
+    # แบ่งย่อหน้าตามหน้า (pdf2docx: 1 หน้า PDF = 1 section)
+    pages, page = {}, 0
+    for child in body:
+        pages.setdefault(page, []).append(child)
+        if child.tag == qn("w:p") and child.find(qn("w:pPr") + "/" + qn("w:sectPr")) is not None:
+            page += 1
+    ids = [int(x) for x in re.findall(r'<wp:docPr[^>]*\sid="(\d+)"', etree.tostring(body).decode())] or [0]
+    next_id = max(ids) + 1
+    added = 0
+    for pno, data in orphans.items():
+        elems = pages.get(pno, [])
+        # ข้อความทั้งหน้าใน .docx พร้อมตำแหน่ง run (รวมในตาราง)
+        stream, owners = [], []
+        for el in elems:
+            for r in el.iter(qn("w:r")):
+                for t in r.iter(qn("w:t")):
+                    for ch in _norm(t.text or ""):
+                        stream.append(ch)
+                        owners.append(r)
+        text = "".join(stream)
+        first_para = next((e for e in elems if e.tag == qn("w:p")), None)
+        for sg in data["segs"]:
+            top_y = sg[3] if sg[0] == "h" else sg[1]
+            # บรรทัดข้อความที่ใกล้ที่สุดซึ่งอยู่เหนือ (หรือระดับเดียวกับ) เส้น
+            cands = [(top_y - bb[1], bb, t) for bb, t in data["lines"] if bb[1] <= top_y + 1 and len(_norm(t)) >= 2]
+            anchor_run, rel = None, None
+            for _, bb, t in sorted(cands)[:3]:
+                key = _norm(t)[:14]
+                k = text.find(key)
+                if k >= 0:
+                    anchor_run, rel = owners[k], bb[1]
+                    break
+            xml = _line_drawing_xml(sg, next_id, rel)
+            next_id += 1
+            run = OxmlElement("w:r")
+            run.append(etree.fromstring(xml))
+            if anchor_run is not None and anchor_run.getparent() is not None:
+                anchor_run.addprevious(run)
+            elif first_para is not None:                      # ไม่เจอบรรทัด -> ยึดกับหน้า
+                run = OxmlElement("w:r")
+                run.append(etree.fromstring(_line_drawing_xml(sg, next_id - 1, None)))
+                ppr = first_para.find(qn("w:pPr"))
+                (ppr.addnext(run) if ppr is not None else first_para.insert(0, run))
+            else:
+                continue
+            added += 1
+    return added
+
+
+def _relax_right_indent(root):
+    """บรรทัดถูกตัดตรงตำแหน่งเดียวกับ PDF อยู่แล้ว (ขึ้นบรรทัดใหม่ทุกบรรทัด) -> ระยะเยื้องขวาของย่อหน้าชิดซ้าย
+    ไม่จำเป็น และทำให้คำสุดท้ายตกบรรทัดถ้าฟอนต์ในเครื่องที่เปิดกว้างกว่าเล็กน้อย"""
+    for p in root.iter(qn("w:p")):
+        ppr = p.find(qn("w:pPr"))
+        if ppr is None:
+            continue
+        jc = ppr.find(qn("w:jc"))
+        if jc is not None and jc.get(qn("w:val")) not in ("left", "start", None):
+            continue
+        ind = ppr.find(qn("w:ind"))
+        for attr in ("w:right", "w:end"):
+            if ind is not None and ind.get(qn(attr)) not in (None, "0"):
+                ind.set(qn(attr), "0")
+
+
+def _shrink_empty_headers(doc):
+    """pdf2docx ใส่หัว/ท้ายกระดาษว่างที่สูงเกินขอบกระดาษ -> เนื้อหาถูกดันลง ~12pt และล้นไปหน้าใหม่
+    ทำให้หัว/ท้ายกระดาษที่ว่างเตี้ยที่สุด และชิดขอบ"""
+    for sec in doc.sections:
+        for part, dist in ((sec.header, "header_distance"), (sec.footer, "footer_distance")):
+            try:
+                if part.is_linked_to_previous:            # ไม่มีหัว/ท้ายกระดาษ (อย่าสร้างใหม่)
+                    continue
+                el = part._element
+            except Exception:  # noqa: BLE001
+                continue
+            if "".join(t.text or "" for t in el.iter(qn("w:t"))).strip():
+                continue                                      # มีข้อความจริง ไม่แตะ
+            for p in el.iter(qn("w:p")):
+                ppr = p.find(qn("w:pPr"))
+                if ppr is None:
+                    ppr = OxmlElement("w:pPr")
+                    p.insert(0, ppr)
+                sp = _child(ppr, "w:spacing")
+                sp.set(qn("w:before"), "0")
+                sp.set(qn("w:after"), "0")
+                sp.set(qn("w:line"), "20")
+                sp.set(qn("w:lineRule"), "exact")
+                rpr = _child(ppr, "w:rPr")
+                for tag in ("w:sz", "w:szCs"):
+                    _child(rpr, tag).set(qn("w:val"), "2")
+            try:
+                cur = getattr(sec, dist)
+                if cur is None or cur > Pt(12):
+                    setattr(sec, dist, Pt(12))
+            except Exception:  # noqa: BLE001
+                pass
+
+
 def convert_text(pdf_path, out_path, font, lost_am=True):
     cv = Converter(pdf_path)
     try:
         # ขึ้นบรรทัดใหม่ตรงกับ PDF ทุกบรรทัด (ค่าเริ่มต้นของ pdf2docx รวมบรรทัดที่เกือบเต็มเข้าด้วยกัน ทำให้ข้อ (2) (4) หาย/ติดกัน)
         cv.convert(out_path, line_break_free_space_ratio=0.0, line_break_width_ratio=1.0)
+        try:
+            parsed = cv.store()
+        except Exception:  # noqa: BLE001
+            parsed = {"pages": []}
     finally:
         cv.close()
+    orphans = _orphan_lines(pdf_path, parsed)
+    try:
+        doubles = _double_borders(pdf_path, parsed)
+    except Exception:  # noqa: BLE001
+        doubles = {}
     # คู่คำที่อยู่ติดกันใน PDF ต้นฉบับ (ใช้คืนช่องว่างที่ pdf2docx ทำหาย)
     with fitz.open(pdf_path) as pdf:
         raw_tokens = fix_thai(" ".join(p.get_text() for p in pdf), lost_am).split()
@@ -326,7 +780,7 @@ def convert_text(pdf_path, out_path, font, lost_am=True):
     known = set(raw_tokens)
 
     doc = Document(out_path)
-    roots = [doc.element.body] + [x for s in doc.sections for x in (s.header._element, s.footer._element)]
+    roots = [doc.element.body] + _hf_roots(doc)
     for root in roots:
         for t in root.iter(qn("w:t")):
             if t.text:
@@ -334,13 +788,20 @@ def convert_text(pdf_path, out_path, font, lost_am=True):
         _restore_spaces(root, pairs, known)
         _keep_thai_digits(root, font)
         _fix_tables(root)
+        _relax_right_indent(root)
+        sanitize_ooxml(root)
         # คำที่ถูกแยกคนละ run เช่น "ส" | " าหรับ", "ท" | " ี่", "เ " | "ป็น"
         for para in root.iter(qn("w:p")):
             ts = [t for t in para.iter(qn("w:t")) if t.text]
             for prev, cur in zip(ts, ts[1:]):
                 _fix_boundary(prev, cur, lost_am)
+    _restore_lines(doc, orphans)
+    _apply_double_borders(doc, doubles)
+    _shrink_empty_headers(doc)
     apply_thai_font(doc, font)
+    finalize_docx(doc)
     doc.save(out_path)
+    embed_fonts(out_path)
 
 
 def _page_image(page, dpi, gray=False):
@@ -390,8 +851,10 @@ def convert_ocr(pdf_path, out_path, font, dpi=300, dict_fix=True):
                         run.add_break()
             if i < len(pdf) - 1:
                 doc.add_page_break()
-    apply_thai_font(doc, "TH Sarabun New" if font == "original" else font)
+    apply_thai_font(doc, DEFAULT_FONT if font == "original" else font)
+    finalize_docx(doc)
     doc.save(out_path)
+    embed_fonts(out_path)
     return fixed_count
 
 
@@ -410,10 +873,11 @@ def convert_image(pdf_path, out_path, dpi=200):
             fmt.line_spacing = 1.0
             # ย่อเล็กน้อยกันล้นไปหน้าใหม่
             p.add_run().add_picture(buf, height=Pt(page.rect.height * 0.985))
+    finalize_docx(doc)
     doc.save(out_path)
 
 
-def convert(pdf_path: str, out_path: str, mode: str = "auto", font: str = "TH Sarabun New",
+def convert(pdf_path: str, out_path: str, mode: str = "auto", font: str = DEFAULT_FONT,
             dict_fix: bool = True) -> dict:
     info = analyze(pdf_path)
     if mode == "auto":
@@ -447,7 +911,7 @@ if __name__ == "__main__":
     ap.add_argument("pdf")
     ap.add_argument("docx")
     ap.add_argument("--mode", default="auto", choices=["auto", "text", "ocr", "image"])
-    ap.add_argument("--font", default="TH Sarabun New")
+    ap.add_argument("--font", default=DEFAULT_FONT)
     ap.add_argument("--no-dict", action="store_true", help="ปิดการแก้คำผิดจาก OCR ด้วยพจนานุกรม")
     a = ap.parse_args()
     print(convert(a.pdf, a.docx, a.mode, a.font, not a.no_dict))

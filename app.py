@@ -5,14 +5,19 @@ import urllib.parse
 
 from flask import Flask, jsonify, render_template, request, send_file
 
-from converter import analyze, convert
+from converter import DEFAULT_FONT, analyze, convert
 from editor import bp as editor_bp
 
 app = Flask(__name__)
 app.register_blueprint(editor_bp)
 app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_UPLOAD_MB", "200")) * 1024 * 1024
 
-FONTS = ["TH Sarabun New", "TH SarabunPSK", "TH SarabunIT๙", "Tahoma", "Leelawadee UI", "Thonburi", "Angsana New", "Cordia New"]
+FONTS = [
+    ("Sarabun TH Compat", "Sarabun TH Compat – แบบ TH Sarabun ฝังในไฟล์ (แนะนำ)"),
+    ("TH Sarabun New", "TH Sarabun New"), ("TH SarabunPSK", "TH SarabunPSK"), ("TH SarabunIT๙", "TH SarabunIT๙"),
+    ("Tahoma", "Tahoma"), ("Leelawadee UI", "Leelawadee UI"), ("Thonburi", "Thonburi"),
+    ("Angsana New", "Angsana New"), ("Cordia New", "Cordia New"),
+]
 
 
 def _save_upload():
@@ -54,7 +59,7 @@ def do_convert():
     if not work:
         return jsonify(error="กรุณาเลือกไฟล์ .pdf"), 400
     mode = request.form.get("mode", "auto")
-    font = request.form.get("font", "TH Sarabun New")
+    font = request.form.get("font", DEFAULT_FONT)
     dict_fix = request.form.get("dict_fix", "1") == "1"
     out_path = os.path.join(work, "output.docx")
     try:

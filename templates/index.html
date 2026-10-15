@@ -88,9 +88,11 @@
     <label class="label" for="font">ฟอนต์ภาษาไทยใน Word</label>
     <select id="font">
       <option value="original">ใช้ฟอนต์เดิมจาก PDF</option>
-      {% for f in fonts %}<option value="{{ f }}" {% if loop.first %}selected{% endif %}>{{ f }}</option>{% endfor %}
+      {% for value, label in fonts %}<option value="{{ value }}" {% if loop.first %}selected{% endif %}>{{ label }}</option>{% endfor %}
     </select>
-    <div class="hint">เครื่องที่เปิดไฟล์ต้องมีฟอนต์นี้ด้วย ถ้าเปิดแล้วสระซ้อนกัน ให้เปลี่ยนเป็น Tahoma (มีในทั้ง Mac และ Windows)</div>
+    <div class="hint">แนะนำ <b>Sarabun TH Compat</b>: หน้าตาและขนาดเท่า TH Sarabun New และฝังฟอนต์ไว้ในไฟล์ Word
+      เปิดเครื่องไหนก็แสดงถูก ไม่ล้นตาราง · ฟอนต์อื่นต้องติดตั้งในเครื่องที่เปิดไฟล์
+      (หรือวางไฟล์ฟอนต์ไว้ในโฟลเดอร์ my-fonts ระบบจะฝังให้)</div>
 
     <button id="go" disabled>แปลงไฟล์</button>
   </div>

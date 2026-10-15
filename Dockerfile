@@ -13,15 +13,16 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
  && python -c "from pythainlp.corpus import tnc, thai_words; tnc.word_freqs(); thai_words()"
 
-# ฟอนต์ที่ขนาดเท่า TH Sarabun New / TH SarabunIT๙ / Cordia / Angsana (ใช้แทนเมื่อไม่มีฟอนต์จริง)
-COPY fonts/*.ttf /usr/share/fonts/truetype/thai-compat/
+# ฟอนต์ "Sarabun TH Compat" (ขนาดเท่า TH Sarabun New / TH SarabunIT๙) ใช้แทนเมื่อไม่มีฟอนต์จริง
+COPY static/fonts/SarabunTHCompat-*.ttf /usr/share/fonts/truetype/thai-compat/
 COPY fonts/thai-aliases.conf /etc/fonts/conf.d/50-thai-aliases.conf
 RUN fc-cache -f
 
-COPY converter.py thai_ocr_fix.py thai_pdf_text.py editor.py app.py entrypoint.sh ./
+COPY converter.py docx_fix.py thai_ocr_fix.py thai_pdf_text.py editor.py app.py entrypoint.sh ./
 COPY templates ./templates
 COPY static ./static
 COPY tests ./tests
+COPY tools ./tools
 RUN chmod +x entrypoint.sh
 
 ENV PYTHONUNBUFFERED=1 MAX_UPLOAD_MB=200 HOME=/tmp

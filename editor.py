@@ -17,8 +17,8 @@ import zipfile
 import pymupdf as fitz
 from flask import Blueprint, abort, jsonify, render_template, request, send_file
 
-from converter import convert, fix_thai
-from thai_pdf_text import add_thai_text, text_width
+from converter import DEFAULT_FONT, convert, fix_thai
+from thai_pdf_text import SARABUN_LIKE, add_runs_at_baseline, add_text_box, line_metrics, pick_family, text_width
 
 bp = Blueprint("editor", __name__)
 WORK_DIR = os.environ.get("EDIT_WORK_DIR", os.path.join(tempfile.gettempdir(), "pdfedit"))
@@ -63,6 +63,10 @@ def _commit(doc_id, doc):
     m["version"] += 1
     m["max_version"] = m["version"]
     path = os.path.join(_dir(doc_id), f"v{m['version']}.pdf")
+    try:
+        doc.subset_fonts()                          # ลดขนาดฟอนต์ที่ฝังเพิ่ม
+    except Exception:  # noqa: BLE001
+        pass
     doc.save(path, garbage=3, deflate=True)
     # ลบเวอร์ชันที่ถูก "redo" ทับ
     for f in os.listdir(_dir(doc_id)):
@@ -190,13 +194,108 @@ def doc_info(doc_id):
     return jsonify(_info(doc_id))
 
 
+IT_FONT = re.compile(r"IT[\?๙9]?(,|-|$)")
+
+
+def _is_bold(sp):
+    f = sp["font"].lower()
+    return bool(sp["flags"] & 16) or any(k in f for k in ("bold", "black", "heavy", "semibold"))
+
+
+def _is_italic(sp):
+    f = sp["font"].lower()
+    return bool(sp["flags"] & 2) or "italic" in f or "oblique" in f
+
+
+def _page_lines(page):
+    """บรรทัดข้อความในหน้า: ข้อความ (ซ่อมภาษาไทยแล้ว), ตำแหน่งเส้นฐาน, ส่วนตัวหนา/ธรรมดา และฟอนต์ที่ใกล้ที่สุด"""
+    out = []
+    for b in page.get_text("rawdict")["blocks"]:
+        for ln in b.get("lines", []):
+            d = ln.get("dir", (1, 0))
+            if abs(d[0] - 1) > 0.01 or abs(d[1]) > 0.01:       # ข้ามข้อความที่หมุน
+                continue
+            chars = [ch for sp in ln["spans"] for ch in sp["chars"]]
+            ink = [ch for ch in chars if not ch["c"].isspace()]
+            if not ink:
+                continue
+            ink_box = fitz.Rect(ink[0]["bbox"])
+            for ch in ink[1:]:
+                ink_box |= fitz.Rect(ch["bbox"])
+            first = next(sp for sp in ln["spans"] if any(not c["c"].isspace() for c in sp["chars"]))
+            runs = []
+            for sp in ln["spans"]:
+                t = "".join(c["c"] for c in sp["chars"])
+                if not t:
+                    continue
+                t = fix_thai(t)
+                if IT_FONT.search(sp["font"]):                    # TH SarabunIT๙ แสดงเลขเป็นเลขไทย
+                    t = t.translate(THAI_DIGITS)
+                st = {"bold": _is_bold(sp), "italic": _is_italic(sp), "color": f"#{sp['color']:06x}",
+                      "size": round(sp["size"], 2)}
+                if runs and all(runs[-1][k] == v for k, v in st.items()):
+                    runs[-1]["text"] += t
+                else:
+                    runs.append(dict(st, text=t))
+            while runs and not runs[0]["text"].strip():
+                runs.pop(0)
+            while runs and not runs[-1]["text"].strip():
+                runs.pop()
+            if not runs:
+                continue
+            runs[0]["text"] = runs[0]["text"].lstrip()
+            runs[-1]["text"] = runs[-1]["text"].rstrip()
+            text = "".join(r["text"] for r in runs)
+            fixed = fix_thai(text)
+            if fixed != text:                                     # ซ่อมข้ามส่วน (เช่น "ส" | " าหรับ")
+                runs = [dict(runs[0], text=fixed)]
+                text = fixed
+            size = first["size"]
+            nb = sum(len(r["text"].strip()) for r in runs if r["bold"])
+            bold = nb * 2 > len(text.replace(" ", ""))
+            family = pick_family(first["font"], text, ink_box.width, size, bold)
+            ours = sum(text_width(r["text"], r["size"], r["bold"], family) for r in runs)
+            fit = ink_box.width / ours if ours > 0 and len(text) > 3 else 1.0
+            lo, hi = (0.93, 1.07) if family == "sarabun" and SARABUN_LIKE.search(first["font"]) else (0.6, 1.6)
+            fit = max(lo, min(hi, fit))
+            out.append({
+                "bbox": list(fitz.Rect(ln["bbox"]) | ink_box), "ink": list(ink_box),
+                "baseline": ink[0]["origin"][1], "x": ink[0]["bbox"][0], "size": size, "fit": round(fit, 4),
+                "family": family, "runs": runs, "text": text, "color": runs[0]["color"], "bold": bold,
+                "font": re.sub(r"^[A-Z]{6}\+", "", first["font"]),
+            })
+    return out
+
+
+def _remove_text(page, rects, fills=()):
+    """ลบตัวอักษรเดิมออกจากไฟล์จริง (ไม่ใช่แค่ทับสีขาว)
+    rects = กรอบบรรทัดที่จะแก้ (ลบเฉพาะตัวอักษร), fills = [(rect, สี)] สำหรับลบ/ปิดทับ"""
+    for r in rects:
+        r = fitz.Rect(r)
+        pad = min(r.height * 0.2, 3)                 # กันไปโดนบรรทัดข้างเคียง
+        page.add_redact_annot(fitz.Rect(r.x0 - 0.3, r.y0 + pad, r.x1 + 0.3, r.y1 - pad), fill=False)
+    for r, color in fills:
+        page.add_redact_annot(fitz.Rect(r), fill=_rgb(color))
+    if rects or fills:
+        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE if not fills else fitz.PDF_REDACT_IMAGE_PIXELS,
+                              graphics=fitz.PDF_REDACT_LINE_ART_NONE)
+        for r, color in fills:
+            page.draw_rect(fitz.Rect(r), color=None, fill=_rgb(color), overlay=True)
+
+
 @bp.get("/api/doc/<doc_id>/page/<int:pno>.png")
 def page_png(doc_id, pno):
+    """ภาพหน้า (hide=1,5 = ซ่อนบรรทัดที่กำลังแก้ เพื่อแสดงตัวอย่างที่ตรงกับผลจริง)"""
     scale = min(max(float(request.args.get("scale", 1.5)), 0.1), 4)
+    hide = [int(x) for x in request.args.get("hide", "").split(",") if x.strip().isdigit()]
     with fitz.open(_current(doc_id)) as doc:
         if not 0 <= pno < len(doc):
             abort(404)
-        pix = doc[pno].get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+        page = doc[pno]
+        if hide:
+            lines = _page_lines(page)
+            _remove_text(page, [lines[i]["bbox"] for i in hide if i < len(lines)])
+        pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
         data = pix.tobytes("png")
     resp = send_file(io.BytesIO(data), mimetype="image/png")
     resp.headers["Cache-Control"] = "private, max-age=3600"
@@ -205,42 +304,30 @@ def page_png(doc_id, pno):
 
 @bp.get("/api/doc/<doc_id>/lines/<int:pno>")
 def page_lines(doc_id, pno):
-    """บรรทัดข้อความในหน้า (ซ่อมภาษาไทยแล้ว) สำหรับคลิกแก้ไข"""
-    out = []
+    """บรรทัดข้อความในหน้า สำหรับคลิกแก้ไข"""
     with fitz.open(_current(doc_id)) as doc:
-        page = doc[pno]
-        for b in page.get_text("rawdict")["blocks"]:
-            for ln in b.get("lines", []):
-                spans = [sp for sp in ln["spans"] if any(not ch["c"].isspace() for ch in sp["chars"])]
-                if not spans:
-                    continue
-                chars = [ch for sp in ln["spans"] for ch in sp["chars"]]
-                ink = [ch for ch in chars if not ch["c"].isspace()]
-                # กรอบเฉพาะตัวอักษรที่มองเห็น (ไม่นับช่องว่างหน้า/หลังบรรทัด)
-                bbox = fitz.Rect(ink[0]["bbox"])
-                for ch in ink[1:]:
-                    bbox |= fitz.Rect(ch["bbox"])
-                bbox.y0, bbox.y1 = ln["bbox"][1], ln["bbox"][3]
-                text = fix_thai("".join(ch["c"] for ch in chars)).strip()
-                font = spans[0]["font"]
-                if re.search(r"IT[\?๙9]?(,|$)", font):          # TH SarabunIT๙ แสดงเลขเป็นเลขไทย
-                    text = text.translate(THAI_DIGITS)
-                size = spans[0]["size"]
-                isb = lambda sp: bool(sp["flags"] & 16) or "bold" in sp["font"].lower()
-                nb = sum(len([c for c in sp["chars"] if not c["c"].isspace()]) for sp in spans if isb(sp))
-                bold = nb * 2 > len(ink)                         # ตัวหนาเมื่อตัวอักษรส่วนใหญ่เป็นตัวหนา
-                w = text_width(text, size, bold) or 1
-                k = max(0.35, min(1.6, bbox.width / w)) if len(text) > 3 else 1.0
-                c = spans[0]["color"]
-                out.append({"bbox": list(bbox), "text": text, "size": size, "fit": k,
-                            "bold": bold, "italic": bool(spans[0]["flags"] & 2),
-                            "color": f"#{c:06x}", "font": font})
-    return jsonify(out)
+        if not 0 <= pno < len(doc):
+            abort(404)
+        return jsonify({"lines": _page_lines(doc[pno]), "metrics": {f: line_metrics(f) for f in ("sarabun", "noto")}})
 
 
 def _rgb(hexcolor):
     h = (hexcolor or "#000000").lstrip("#")
     return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+
+
+def _runs_of(op, size_mult=1.0):
+    base = {"bold": bool(op.get("bold")), "italic": bool(op.get("italic")),
+            "underline": bool(op.get("underline")), "color": op.get("color") or "#000000",
+            "size": float(op.get("size") or 14)}
+    runs = op.get("runs") or [{"text": op.get("text", "")}]
+    out = []
+    for r in runs:
+        rr = dict(base)
+        rr.update({k: v for k, v in r.items() if v is not None})
+        rr["size"] = float(rr.get("size") or base["size"]) * size_mult
+        out.append(rr)
+    return out
 
 
 def _apply_ops(doc, ops):
@@ -249,38 +336,26 @@ def _apply_ops(doc, ops):
         by_page.setdefault(int(op["page"]), []).append(op)
     for pno, pops in by_page.items():
         page = doc[pno]
-        # 1) ลบข้อความเดิม (แก้ข้อความ) และปิดทับ/ลบ (whiteout) ก่อน
-        redact = False
-        for op in pops:
-            if op["type"] == "edit_text":
-                r = fitz.Rect(op["bbox"])
-                pad = r.height * 0.18                      # กันไปลบบรรทัดข้างเคียง
-                page.add_redact_annot(fitz.Rect(r.x0 - 0.5, r.y0 + pad, r.x1 + 0.5, r.y1 - pad), fill=False)
-                redact = True
-            elif op["type"] == "whiteout":
-                page.add_redact_annot(fitz.Rect(op["rect"]), fill=_rgb(op.get("color", "#ffffff")))
-                redact = True
-        if redact:
-            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=fitz.PDF_REDACT_LINE_ART_NONE)
-            for op in pops:                                 # whiteout ลบรูป/เส้นใต้กรอบด้วย
-                if op["type"] == "whiteout":
-                    page.draw_rect(fitz.Rect(op["rect"]), color=None, fill=_rgb(op.get("color", "#ffffff")),
-                                   overlay=True)
+        # 1) ลบตัวอักษรเดิมของบรรทัดที่แก้ และส่วนที่สั่งลบ/ปิดทับ
+        _remove_text(page, [op["bbox"] for op in pops if op["type"] == "edit_text"],
+                     [(op["rect"], op.get("color", "#ffffff")) for op in pops if op["type"] == "whiteout"])
         # 2) วาด/ใส่ของใหม่
         for op in pops:
             t = op["type"]
             if t == "edit_text":
-                r = fitz.Rect(op["bbox"])
-                size = float(op["size"]) * float(op.get("fit", 1))
-                need = text_width(op["text"].split("\n")[0], size, op.get("bold"))
-                x1 = max(r.x1 + 2, min(page.rect.width - 20, r.x0 + need * 1.08 + 4))
-                box = fitz.Rect(r.x0, r.y0 - r.height * 0.15, x1, r.y1 + r.height * 0.6 * (op["text"].count("\n") + 1))
-                add_thai_text(page, box, op["text"], size, op.get("color", "#000000"), op.get("bold"),
-                              op.get("italic"), op.get("underline"), "left", 1.15)
+                runs = _runs_of(op, float(op.get("fit", 1)))
+                bb = fitz.Rect(op["bbox"])
+                x = float(op.get("x", bb.x0))
+                base = float(op.get("baseline", bb.y1 - (bb.height * 0.25 / 1.1)))
+                if any(r["text"].strip() for r in runs):
+                    add_runs_at_baseline(page, runs, x, base,
+                                         float(op["size"]) * float(op.get("fit", 1)), op.get("family", "sarabun"),
+                                         op.get("color", "#000000"), max_x=page.rect.width - 14)
             elif t == "text":
-                add_thai_text(page, op["rect"], op["text"], float(op.get("size", 14)), op.get("color", "#000000"),
-                              op.get("bold"), op.get("italic"), op.get("underline"), op.get("align", "left"),
-                              1.25)
+                runs = _runs_of(op)
+                if any(r["text"].strip() for r in runs):
+                    add_text_box(page, op["rect"], runs, float(op.get("size", 14)), op.get("family", "sarabun"),
+                                 op.get("color", "#000000"), op.get("align", "left"))
             elif t == "image":
                 data = op["data"].split(",", 1)[-1]
                 page.insert_image(fitz.Rect(op["rect"]), stream=base64.b64decode(data), keep_proportion=False,
@@ -314,6 +389,8 @@ def apply_edits(doc_id):
         try:
             _apply_ops(doc, ops)
         except Exception as e:  # noqa: BLE001
+            import traceback
+            traceback.print_exc()
             return jsonify(error=f"บันทึกการแก้ไขไม่สำเร็จ: {e}"), 500
         _commit(doc_id, doc)
     return jsonify(_info(doc_id))
@@ -375,21 +452,25 @@ def watermark(doc_id):
     text = p.get("text", "").strip()
     if not text:
         return jsonify(error="กรุณาใส่ข้อความลายน้ำ"), 400
-    size = float(p.get("size", 60))
+    size0 = float(p.get("size", 60))
     color = p.get("color", "#9ca3af")
     opacity = float(p.get("opacity", 0.3))
+    angle = float(p.get("angle", 45)) if p.get("diagonal", True) else 0.0
     with fitz.open(_current(doc_id)) as doc:
         for page in doc:
             r = page.rect
-            tmp = fitz.open()
-            tp = tmp.new_page(width=r.width, height=r.height)
+            size = size0
+            limit = (r.width ** 2 + r.height ** 2) ** 0.5 * 0.8 if angle else r.width * 0.9
             w = text_width(text, size, True)
-            box = fitz.Rect(0, r.height / 2 - size, r.width, r.height / 2 + size)
-            if w > r.width * 0.9:
-                size *= r.width * 0.9 / w
-            add_thai_text(tp, box, text, size, color, True, align="center", opacity=opacity)
-            page.show_pdf_page(r, tmp, 0, rotate=int(p.get("angle", 45)) if p.get("diagonal", True) else 0,
-                               overlay=True, keep_proportion=True)
+            if w > limit:
+                size *= limit / w
+                w = limit
+            c = fitz.Point(r.width / 2, r.height / 2)
+            m = line_metrics("sarabun")
+            h = size * (m["asc"] + m["desc"] + m["gap"])
+            box = fitz.Rect(c.x - w / 2 - 4, c.y - h / 2, c.x + w / 2 + 4, c.y + h / 2)
+            add_text_box(page, box, [{"text": text, "bold": True}], size, "sarabun", color, "center",
+                         opacity=opacity, rotate=-angle, pivot=c)
         _commit(doc_id, doc)
     return jsonify(_info(doc_id))
 
@@ -404,15 +485,17 @@ def page_numbers(doc_id):
     thai = bool(p.get("thai_digits"))
     with fitz.open(_current(doc_id)) as doc:
         total = len(doc)
+        m = line_metrics("sarabun")
+        h = size * (m["asc"] + m["desc"] + m["gap"])
         for i, page in enumerate(doc):
             label = fmt.replace("{n}", str(i + start)).replace("{total}", str(total + start - 1))
             if thai:
                 label = label.translate(THAI_DIGITS)
             r = page.rect
-            y0, y1 = (14, 14 + size * 2) if pos.startswith("top") else (r.height - 18 - size * 2, r.height - 14)
+            y0 = 18 if pos.startswith("top") else r.height - 22 - h
             align = pos.split("-")[1]
-            add_thai_text(page, fitz.Rect(30, y0, r.width - 30, y1), label, size, p.get("color", "#000000"),
-                          align=align)
+            add_text_box(page, fitz.Rect(36, y0, r.width - 36, y0 + h + 2), [{"text": label}], size, "sarabun",
+                         p.get("color", "#000000"), align)
         _commit(doc_id, doc)
     return jsonify(_info(doc_id))
 
@@ -472,7 +555,7 @@ def _excel(doc, path):
 
     wb = Workbook()
     wb.remove(wb.active)
-    th_font = Font(name="TH Sarabun New", size=14)
+    th_font = Font(name="Tahoma", size=11)          # มีทั้งใน Mac และ Windows แสดงภาษาไทยได้
     for pno, page in enumerate(doc):
         tables = page.find_tables().tables
         for ti, tab in enumerate(tables):
@@ -534,7 +617,7 @@ def export(doc_id):
             src = os.path.join(tmp, "in.pdf")
             doc.save(src)
             out = os.path.join(tmp, "out.docx")
-            convert(src, out, request.args.get("mode", "auto"), request.args.get("font", "TH Sarabun New"))
+            convert(src, out, request.args.get("mode", "auto"), request.args.get("font", DEFAULT_FONT))
             return send_file(out, as_attachment=True, download_name=name + ".docx")
         if fmt == "xlsx":
             out = os.path.join(tmp, "out.xlsx")
