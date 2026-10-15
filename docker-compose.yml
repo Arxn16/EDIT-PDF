@@ -1,0 +1,10 @@
+services:
+  pdf2word:
+    build: .
+    container_name: pdf2word-thai
+    ports:
+      - "127.0.0.1:8080:8080"   # เปิดให้เครื่องตัวเองเท่านั้น
+    volumes:
+      # วางไฟล์ฟอนต์ (.ttf/.otf) เช่น TH Sarabun New ไว้ในโฟลเดอร์ my-fonts แล้วสั่ง docker compose restart
+      - ./my-fonts:/usr/share/fonts/truetype/user:ro
+    restart: unless-stopped

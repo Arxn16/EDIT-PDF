@@ -1,0 +1,746 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>แก้ไข PDF (ภาษาไทย)</title>
+<style>
+  @font-face { font-family: "NotoTH"; src: url("/static/fonts/NotoSansThai-Regular.ttf"); }
+  @font-face { font-family: "NotoTH"; src: url("/static/fonts/NotoSansThai-Bold.ttf"); font-weight: bold; }
+  :root {
+    --bg: #eef0f3; --panel: #fff; --text: #1d2330; --muted: #6b7280; --line: #dfe3e8;
+    --accent: #2563eb; --accent-soft: #e8efff; --danger: #dc2626; --ok: #15803d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14161b; --panel: #1d2027; --text: #e8eaee; --muted: #9aa1ad; --line: #2e323b;
+      --accent: #6b9bff; --accent-soft: #1f2a44; --danger: #f87171; --ok: #4ade80; }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); display: flex; flex-direction: column;
+    font: 14px/1.5 "Sukhumvit Set", "Thonburi", "Leelawadee UI", "Tahoma", system-ui, sans-serif; }
+  button, select, input { font: inherit; color: inherit; }
+  /* ---------- top ---------- */
+  .top { background: var(--panel); border-bottom: 1px solid var(--line); display: flex; align-items: center;
+    gap: 6px; padding: 6px 10px; flex-wrap: wrap; }
+  .brand { font-weight: 700; margin-right: 6px; white-space: nowrap; }
+  .nav a { color: var(--muted); text-decoration: none; padding: 6px 10px; border-radius: 8px; }
+  .nav a.on { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+  .sp { flex: 1; }
+  .btn { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 6px 11px;
+    cursor: pointer; white-space: nowrap; }
+  .btn:hover:not(:disabled) { border-color: var(--accent); }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .btn.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 4px; }
+  .tools { background: var(--panel); border-bottom: 1px solid var(--line); display: flex; gap: 4px;
+    padding: 6px 10px; flex-wrap: wrap; align-items: center; }
+  .tool { border: 1px solid transparent; background: none; border-radius: 8px; padding: 5px 10px; cursor: pointer; }
+  .tool:hover { background: var(--bg); }
+  .tool.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .props { display: flex; gap: 6px; align-items: center; margin-left: auto; flex-wrap: wrap; }
+  .props label { color: var(--muted); font-size: 13px; display: flex; gap: 4px; align-items: center; }
+  .props input[type=number] { width: 58px; padding: 3px 5px; border: 1px solid var(--line); border-radius: 6px;
+    background: var(--panel); }
+  .props input[type=color] { width: 30px; height: 26px; border: 1px solid var(--line); border-radius: 6px;
+    padding: 1px; background: var(--panel); }
+  .props .fmt { padding: 3px 9px; }
+  /* ---------- body ---------- */
+  .main { flex: 1; display: flex; min-height: 0; }
+  .side { width: 150px; background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto;
+    padding: 10px 8px; flex-shrink: 0; }
+  .thumb { position: relative; margin: 0 auto 12px; width: 110px; cursor: grab; border-radius: 6px; }
+  .thumb img { width: 100%; display: block; border: 2px solid var(--line); border-radius: 4px; background: #fff; }
+  .thumb.cur img { border-color: var(--accent); }
+  .thumb.drag-over img { border-color: var(--ok); border-style: dashed; }
+  .thumb .no { text-align: center; font-size: 12px; color: var(--muted); }
+  .thumb .acts { position: absolute; top: 4px; right: 4px; display: none; gap: 2px; }
+  .thumb:hover .acts { display: flex; }
+  .thumb .acts button { width: 24px; height: 24px; border-radius: 6px; border: 1px solid var(--line);
+    background: var(--panel); cursor: pointer; font-size: 13px; padding: 0; line-height: 1; }
+  .side .add { width: 110px; display: block; margin: 0 auto; }
+  .viewer { flex: 1; overflow: auto; padding: 24px; position: relative; }
+  .empty { max-width: 560px; margin: 8vh auto; text-align: center; background: var(--panel);
+    border: 2px dashed var(--line); border-radius: 16px; padding: 48px 24px; cursor: pointer; }
+  .empty.over { border-color: var(--accent); background: var(--accent-soft); }
+  .empty h2 { margin: 0 0 6px; }
+  .empty p { color: var(--muted); margin: 0; }
+  .page { position: relative; margin: 0 auto 24px; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.18); }
+  .page img.bg { position: absolute; inset: 0; width: 100%; height: 100%; user-select: none; -webkit-user-drag: none; }
+  .layer { position: absolute; inset: 0; }
+  .page-label { position: absolute; left: -36px; top: 0; color: var(--muted); font-size: 12px; }
+  .hit { position: absolute; border-radius: 2px; cursor: text; pointer-events: none; }
+  .tool-edittext .hit { pointer-events: auto; }
+  .tool-edittext .hit:hover { background: rgba(37,99,235,.14); outline: 1px dashed var(--accent); }
+  .tool-edittext .hit.done { display: none; }
+  .obj { position: absolute; }
+  .obj.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .obj .del, .obj .rs { display: none; position: absolute; z-index: 3; }
+  .obj.sel .del, .obj.sel .rs { display: block; }
+  .obj .del { top: -12px; right: -12px; width: 22px; height: 22px; border-radius: 50%; border: 0;
+    background: var(--danger); color: #fff; cursor: pointer; font-size: 13px; line-height: 22px; padding: 0; }
+  .obj .rs { right: -6px; bottom: -6px; width: 12px; height: 12px; background: var(--accent);
+    border-radius: 3px; cursor: nwse-resize; }
+  .obj .txt { width: 100%; height: 100%; outline: none; white-space: pre-wrap; word-break: break-word;
+    font-family: "NotoTH", sans-serif; line-height: 1.25; overflow: hidden; }
+  .obj.t-edit_text .txt { background: #fff; line-height: 1.15; }
+  .obj.t-text .txt { cursor: move; }
+  .obj.t-text.editing .txt, .obj.t-edit_text .txt { cursor: text; }
+  .obj.t-image img { width: 100%; height: 100%; display: block; pointer-events: none; }
+  .obj.t-highlight { mix-blend-mode: multiply; }
+  .tool-select .obj { cursor: move; }
+  svg.ink { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+  .drawing { position: absolute; border: 1.5px dashed var(--accent); pointer-events: none; }
+  .tool-addtext .layer, .tool-highlight .layer, .tool-whiteout .layer, .tool-rect .layer,
+  .tool-line .layer, .tool-ink .layer { cursor: crosshair; }
+  /* ---------- status / dialogs ---------- */
+  .status { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); background: #111827; color: #fff;
+    padding: 8px 16px; border-radius: 10px; font-size: 14px; display: none; z-index: 50; max-width: 90vw; }
+  .status.err { background: var(--danger); }
+  .busy { position: fixed; inset: 0; background: rgba(0,0,0,.25); display: none; align-items: center;
+    justify-content: center; z-index: 40; }
+  .busy div { background: var(--panel); padding: 16px 22px; border-radius: 12px; }
+  .menu { position: absolute; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.15); padding: 8px; z-index: 30; display: none; width: 260px; }
+  .menu button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 7px 10px;
+    border-radius: 6px; cursor: pointer; }
+  .menu button:hover { background: var(--accent-soft); }
+  .menu small { color: var(--muted); }
+  .menu .row { padding: 6px 10px 10px; border-bottom: 1px solid var(--line); margin-bottom: 6px; }
+  .menu .row input { width: 100%; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px;
+    background: var(--panel); margin-top: 4px; }
+  dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--text);
+    padding: 20px; width: min(460px, 92vw); }
+  dialog::backdrop { background: rgba(0,0,0,.35); }
+  dialog h3 { margin: 0 0 12px; }
+  dialog label { display: block; margin: 10px 0 4px; color: var(--muted); font-size: 13px; }
+  dialog input[type=text], dialog select, dialog input[type=number] { width: 100%; padding: 7px 9px;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+  dialog .acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  #sigPad { width: 100%; height: 180px; border: 1px dashed var(--line); border-radius: 10px; background: #fff;
+    touch-action: none; cursor: crosshair; }
+  @media (max-width: 760px) { .side { display: none; } .viewer { padding: 12px; } .page-label { display: none; } }
+</style>
+</head>
+<body>
+<div class="top">
+  <span class="brand">PDF ภาษาไทย</span>
+  <nav class="nav"><a href="/">แปลง PDF → Word</a><a href="/editor" class="on">แก้ไข PDF</a></nav>
+  <span class="sep"></span>
+  <button class="btn" id="bOpen">เปิดไฟล์</button>
+  <button class="btn" id="bMerge" disabled title="เพิ่มไฟล์ PDF / Word / Excel / รูป ต่อท้าย">รวมไฟล์</button>
+  <span class="sep"></span>
+  <button class="btn" id="bUndo" disabled title="ย้อนกลับ (Ctrl+Z)">↶ ย้อนกลับ</button>
+  <button class="btn" id="bRedo" disabled title="ทำซ้ำ (Ctrl+Y)">↷ ทำซ้ำ</button>
+  <span class="sep"></span>
+  <button class="btn" id="bWm" disabled>ลายน้ำ</button>
+  <button class="btn" id="bPn" disabled>เลขหน้า</button>
+  <span class="sp"></span>
+  <span id="zoomBox" style="display:none;gap:4px;align-items:center">
+    <button class="btn" id="zOut">−</button><span id="zVal" style="min-width:46px;text-align:center">100%</span>
+    <button class="btn" id="zIn">+</button>
+  </span>
+  <button class="btn primary" id="bSave" disabled>บันทึกการแก้ไข</button>
+  <button class="btn primary" id="bExport" disabled>Export ▾</button>
+</div>
+
+<div class="tools" id="tools" style="display:none">
+  <button class="tool on" data-tool="select" title="เลือก / ย้าย / ลบวัตถุ">เลือก</button>
+  <button class="tool" data-tool="edittext" title="คลิกที่ข้อความเดิมเพื่อแก้">แก้ข้อความ</button>
+  <button class="tool" data-tool="addtext" title="คลิกตำแหน่งที่จะเพิ่มข้อความ">เพิ่มข้อความ</button>
+  <button class="tool" data-tool="image">รูปภาพ</button>
+  <button class="tool" data-tool="signature">ลายเซ็น</button>
+  <button class="tool" data-tool="highlight" title="ลากคลุมส่วนที่ต้องการไฮไลต์">ไฮไลต์</button>
+  <button class="tool" data-tool="whiteout" title="ลากคลุมเพื่อลบ/ปิดทับ (ลบข้อความจริง)">ลบ/ปิดทับ</button>
+  <button class="tool" data-tool="ink">ปากกา</button>
+  <button class="tool" data-tool="rect">กรอบ</button>
+  <button class="tool" data-tool="line">เส้น</button>
+  <div class="props">
+    <label>ขนาด <input type="number" id="pSize" value="14" min="4" max="200" step="0.5"></label>
+    <label>สี <input type="color" id="pColor" value="#000000"></label>
+    <button class="btn fmt" id="pBold" title="ตัวหนา"><b>B</b></button>
+    <button class="btn fmt" id="pItalic" title="ตัวเอียง"><i>I</i></button>
+    <button class="btn fmt" id="pUnder" title="ขีดเส้นใต้"><u>U</u></button>
+    <label>เส้น <input type="number" id="pWidth" value="2" min="0.5" max="20" step="0.5"></label>
+  </div>
+</div>
+
+<div class="main">
+  <aside class="side" id="side" style="display:none">
+    <div id="thumbs"></div>
+    <button class="btn add" id="bBlank">+ หน้าว่าง</button>
+  </aside>
+  <section class="viewer" id="viewer">
+    <div class="empty" id="empty">
+      <h2>เปิดไฟล์เพื่อแก้ไข</h2>
+      <p>ลากไฟล์มาวาง หรือคลิกเพื่อเลือก<br>รองรับ PDF, Word, Excel, PowerPoint, รูปภาพ (แปลงเป็น PDF ให้อัตโนมัติ)</p>
+    </div>
+    <div id="pages"></div>
+  </section>
+</div>
+
+<div class="menu" id="exportMenu">
+  <div class="row"><small>หน้าที่ต้องการ (เว้นว่าง = ทุกหน้า) เช่น 1-3,5</small>
+    <input type="text" id="exPages" placeholder="ทุกหน้า"></div>
+  <button data-fmt="pdf">PDF <small>· ไฟล์ที่แก้แล้ว / แยกหน้า</small></button>
+  <button data-fmt="docx">Word (.docx) <small>· ภาษาไทยไม่เพี้ยน</small></button>
+  <button data-fmt="xlsx">Excel (.xlsx) <small>· ดึงตาราง</small></button>
+  <button data-fmt="png">รูปภาพ PNG</button>
+  <button data-fmt="jpg">รูปภาพ JPG</button>
+  <button data-fmt="txt">ข้อความ (.txt)</button>
+</div>
+
+<dialog id="dSig">
+  <h3>เซ็นชื่อ</h3>
+  <canvas id="sigPad"></canvas>
+  <label>สีหมึก</label><input type="color" id="sigColor" value="#1d3a8a">
+  <div class="acts"><button class="btn" id="sigClear">ล้าง</button><span class="sp"></span>
+    <button class="btn" value="cancel" formmethod="dialog" onclick="dSig.close()">ยกเลิก</button>
+    <button class="btn primary" id="sigOk">ใช้ลายเซ็นนี้</button></div>
+</dialog>
+
+<dialog id="dWm">
+  <h3>ใส่ลายน้ำ</h3>
+  <label>ข้อความ</label><input type="text" id="wmText" value="สำเนา">
+  <label>ความจาง: <span id="wmOpV">25</span>%</label><input type="range" id="wmOp" min="5" max="90" value="25" style="width:100%">
+  <label>ขนาดตัวอักษร</label><input type="number" id="wmSize" value="60" min="10" max="200">
+  <label>สี</label><input type="color" id="wmColor" value="#9ca3af">
+  <label><input type="checkbox" id="wmDiag" checked> เอียงทแยง</label>
+  <div class="acts"><button class="btn" onclick="dWm.close()">ยกเลิก</button>
+    <button class="btn primary" id="wmOk">ใส่ทุกหน้า</button></div>
+</dialog>
+
+<dialog id="dPn">
+  <h3>ใส่เลขหน้า</h3>
+  <label>รูปแบบ</label>
+  <select id="pnFmt"><option value="{n}">1</option><option value="หน้า {n}">หน้า 1</option>
+    <option value="{n} / {total}">1 / 10</option><option value="หน้า {n} จาก {total}">หน้า 1 จาก 10</option>
+    <option value="- {n} -">- 1 -</option></select>
+  <label>ตำแหน่ง</label>
+  <select id="pnPos"><option value="bottom-center">ล่าง กลาง</option><option value="bottom-right">ล่าง ขวา</option>
+    <option value="bottom-left">ล่าง ซ้าย</option><option value="top-center">บน กลาง</option>
+    <option value="top-right">บน ขวา</option></select>
+  <label>เริ่มที่เลข</label><input type="number" id="pnStart" value="1" min="0">
+  <label>ขนาดตัวอักษร</label><input type="number" id="pnSize" value="12" min="6" max="40">
+  <label><input type="checkbox" id="pnThai"> ใช้เลขไทย (๑ ๒ ๓)</label>
+  <div class="acts"><button class="btn" onclick="dPn.close()">ยกเลิก</button>
+    <button class="btn primary" id="pnOk">ใส่เลขหน้า</button></div>
+</dialog>
+
+<input type="file" id="fOpen" hidden accept=".pdf,.doc,.docx,.odt,.rtf,.txt,.xls,.xlsx,.ods,.csv,.ppt,.pptx,.odp,image/*">
+<input type="file" id="fMerge" hidden accept=".pdf,.doc,.docx,.odt,.rtf,.txt,.xls,.xlsx,.ods,.csv,.ppt,.pptx,.odp,image/*">
+<input type="file" id="fImage" hidden accept="image/*">
+<div class="status" id="status"></div>
+<div class="busy" id="busy"><div id="busyText">กำลังทำงาน…</div></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+let D = null;               // ข้อมูลเอกสาร {id, name, version, pages:[{w,h}], can_undo, can_redo}
+let zoom = 1, tool = "select", sel = null, nextId = 1;
+let objs = [];              // การแก้ไขที่ยังไม่บันทึก
+const lineCache = {};       // บรรทัดข้อความของแต่ละหน้า (แก้ข้อความ)
+const fmt = { bold: false, italic: false, underline: false };
+
+/* ---------------- utilities ---------------- */
+function toast(msg, err = false, ms = 2600) {
+  const s = $("#status"); s.textContent = msg; s.className = "status" + (err ? " err" : "");
+  s.style.display = "block"; clearTimeout(toast.t); toast.t = setTimeout(() => s.style.display = "none", ms);
+}
+function busy(on, text = "กำลังทำงาน…") { $("#busyText").textContent = text; $("#busy").style.display = on ? "flex" : "none"; }
+async function api(url, opts = {}) {
+  const r = await fetch(url, opts);
+  if (!r.ok) { let m = `ผิดพลาด (${r.status})`; try { m = (await r.json()).error || m; } catch {} throw new Error(m); }
+  return r;
+}
+const json = (url, body) => api(url, { method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body || {}) }).then(r => r.json());
+const S = () => zoom;       // px ต่อ point
+
+/* ---------------- open / render ---------------- */
+async function openFile(file, merge = false) {
+  if (!file) return;
+  if (merge) await saveIfNeeded();
+  const fd = new FormData(); fd.append("file", file);
+  busy(true, merge ? "กำลังรวมไฟล์…" : "กำลังเปิดไฟล์…");
+  try {
+    const r = await api(merge ? `/api/doc/${D.id}/merge` : "/api/doc", { method: "POST", body: fd });
+    const info = await r.json();
+    if (!merge) { objs = []; for (const k in lineCache) delete lineCache[k]; fitZoom(info); }
+    setDoc(info); toast(merge ? "รวมไฟล์แล้ว" : `เปิด ${info.name} แล้ว (${info.pages.length} หน้า)`);
+  } catch (e) { toast(e.message, true, 5000); }
+  busy(false);
+}
+function fitZoom(info) {
+  const w = $("#viewer").clientWidth - 80;
+  const maxW = Math.max(...info.pages.map(p => p.w));
+  zoom = Math.max(0.4, Math.min(1.5, w / maxW));
+}
+function setDoc(info) {
+  const changed = !D || D.version !== info.version || D.id !== info.id;
+  D = info;
+  if (changed) for (const k in lineCache) delete lineCache[k];
+  $("#empty").style.display = "none";
+  ["#tools"].forEach(s => $(s).style.display = "flex");
+  $("#side").style.display = ""; $("#zoomBox").style.display = "flex";
+  ["#bMerge", "#bWm", "#bPn", "#bExport"].forEach(s => $(s).disabled = false);
+  $("#bUndo").disabled = !info.can_undo && !objs.length; $("#bRedo").disabled = !info.can_redo;
+  document.title = `${info.name} – แก้ไข PDF`;
+  render();
+}
+function render() {
+  const pages = $("#pages"); pages.innerHTML = "";
+  const thumbs = $("#thumbs"); thumbs.innerHTML = "";
+  const dpr = window.devicePixelRatio || 1;
+  D.pages.forEach((p, i) => {
+    const el = document.createElement("div");
+    el.className = "page"; el.dataset.page = i;
+    el.style.width = p.w * S() + "px"; el.style.height = p.h * S() + "px";
+    const rs = Math.min(4, S() * dpr).toFixed(2);
+    el.innerHTML = `<span class="page-label">${i + 1}</span>
+      <img class="bg" loading="lazy" src="/api/doc/${D.id}/page/${i}.png?scale=${rs}&v=${D.version}">
+      <div class="layer"></div>`;
+    pages.appendChild(el);
+    bindLayer(el.querySelector(".layer"), i);
+
+    const t = document.createElement("div");
+    t.className = "thumb"; t.draggable = true; t.dataset.page = i;
+    t.innerHTML = `<img loading="lazy" src="/api/doc/${D.id}/page/${i}.png?scale=0.22&v=${D.version}">
+      <div class="no">${i + 1}</div>
+      <div class="acts"><button title="หมุน" data-a="rotate">↻</button><button title="ทำสำเนาหน้า" data-a="duplicate">⧉</button>
+      <button title="ลบหน้า" data-a="delete">✕</button></div>`;
+    thumbs.appendChild(t);
+  });
+  objs.forEach(drawObj);
+  if (tool === "edittext") loadAllLines();
+  $("#zVal").textContent = Math.round(zoom * 100) + "%";
+  updateButtons();
+}
+function updateButtons() {
+  $("#bSave").disabled = !objs.length;
+  $("#bSave").textContent = objs.length ? `บันทึกการแก้ไข (${objs.length})` : "บันทึกการแก้ไข";
+  if (D) { $("#bUndo").disabled = !D.can_undo && !objs.length; $("#bRedo").disabled = !D.can_redo || objs.length > 0; }
+}
+const layerOf = p => document.querySelector(`.page[data-page="${p}"] .layer`);
+
+/* ---------------- tools ---------------- */
+function setTool(t) {
+  if (t === "image") { $("#fImage").click(); return; }
+  if (t === "signature") { openSig(); return; }
+  tool = t;
+  $$(".tool").forEach(b => b.classList.toggle("on", b.dataset.tool === t));
+  $("#viewer").className = "viewer tool-" + t;
+  select(null);
+  if (t === "edittext") loadAllLines();
+  const tip = { edittext: "คลิกที่ข้อความเดิมเพื่อแก้ไข", addtext: "คลิกตรงที่ต้องการเพิ่มข้อความ",
+    highlight: "ลากคลุมส่วนที่ต้องการไฮไลต์", whiteout: "ลากคลุมส่วนที่ต้องการลบ (ข้อความใต้กรอบจะถูกลบจริง)",
+    ink: "ลากเพื่อวาด", rect: "ลากเพื่อวาดกรอบ", line: "ลากเพื่อวาดเส้น" }[t];
+  if (tip) toast(tip);
+  if (t === "highlight") $("#pColor").value = "#ffeb3b";
+  else if (t === "whiteout") $("#pColor").value = "#ffffff";
+  else if (["rect", "line"].includes(t)) $("#pColor").value = "#e11d48";
+  else if (t === "ink") $("#pColor").value = "#1d4ed8";
+  else if (["addtext", "edittext"].includes(t) && ["#ffeb3b", "#ffffff"].includes($("#pColor").value)) $("#pColor").value = "#000000";
+}
+$$(".tool").forEach(b => b.addEventListener("click", () => setTool(b.dataset.tool)));
+
+async function loadLines(p) {
+  if (!lineCache[p]) lineCache[p] = await api(`/api/doc/${D.id}/lines/${p}`).then(r => r.json());
+  const layer = layerOf(p); if (!layer) return;
+  layer.querySelectorAll(".hit").forEach(h => h.remove());
+  lineCache[p].forEach((ln, idx) => {
+    const [x0, y0, x1, y1] = ln.bbox;
+    const h = document.createElement("div");
+    h.className = "hit"; h.dataset.idx = idx;
+    if (objs.some(o => o.type === "edit_text" && o.page === p && o.idx === idx)) h.classList.add("done");
+    Object.assign(h.style, { left: x0 * S() + "px", top: y0 * S() + "px",
+      width: (x1 - x0) * S() + "px", height: (y1 - y0) * S() + "px" });
+    h.addEventListener("click", ev => { if (tool !== "edittext") return; ev.stopPropagation(); startEditLine(p, idx, h); });
+    layer.prepend(h);
+  });
+}
+function loadAllLines() { D.pages.forEach((_, i) => loadLines(i).catch(e => toast(e.message, true))); }
+
+function startEditLine(p, idx, hitEl) {
+  const ln = lineCache[p][idx];
+  const o = { id: nextId++, type: "edit_text", page: p, idx, bbox: ln.bbox.slice(), orig: ln.text, text: ln.text,
+    size: ln.size, fit: ln.fit, bold: ln.bold, italic: ln.italic, underline: false, color: ln.color === "#000000" ? "#000000" : ln.color };
+  objs.push(o); drawObj(o); hitEl.classList.add("done");
+  const t = o.el.querySelector(".txt"); t.focus(); placeCaretEnd(t); select(o); updateButtons();
+}
+function placeCaretEnd(el) {
+  const r = document.createRange(); r.selectNodeContents(el); r.collapse(false);
+  const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+}
+
+/* ---------------- objects ---------------- */
+function rectOf(o) { return o.type === "edit_text" ? o.bbox : o.rect; }
+function drawObj(o) {
+  const layer = layerOf(o.page); if (!layer) return;
+  if (o.el) o.el.remove();
+  if (o.type === "ink" || o.type === "line") {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.classList.add("ink"); svg.setAttribute("viewBox", `0 0 ${D.pages[o.page].w} ${D.pages[o.page].h}`);
+    svg.setAttribute("preserveAspectRatio", "none");
+    const paths = o.type === "line" ? [o.points] : o.paths;
+    svg.innerHTML = paths.map(pts => `<polyline fill="none" stroke="${o.color}" stroke-width="${o.width}"
+      stroke-linecap="round" stroke-linejoin="round" points="${pts.map(q => q.join(",")).join(" ")}"/>`).join("");
+    // กล่องสำหรับเลือก/ลบ
+    const xs = paths.flat().map(q => q[0]), ys = paths.flat().map(q => q[1]);
+    o.rect = [Math.min(...xs) - 3, Math.min(...ys) - 3, Math.max(...xs) + 3, Math.max(...ys) + 3];
+    const box = document.createElement("div"); box.className = "obj t-" + o.type;
+    box.innerHTML = `<button class="del" title="ลบ">✕</button>`;
+    layer.appendChild(svg); layer.appendChild(box);
+    o.el = box; o.svg = svg; positionObj(o); bindObj(o);
+    return;
+  }
+  const el = document.createElement("div"); el.className = "obj t-" + o.type; o.el = el;
+  if (o.type === "text" || o.type === "edit_text") {
+    el.innerHTML = `<div class="txt" contenteditable="true" spellcheck="false"></div>`;
+    const t = el.querySelector(".txt"); t.innerText = o.text;
+    t.addEventListener("input", () => { o.text = t.innerText.replace(/\n$/, ""); if (o.type === "text") autoGrow(o); });
+    t.addEventListener("focus", () => { select(o); el.classList.add("editing"); });
+    t.addEventListener("blur", () => el.classList.remove("editing"));
+    styleText(o);
+  } else if (o.type === "image") {
+    el.innerHTML = `<img src="${o.data}">`;
+  } else if (o.type === "highlight") {
+    el.style.background = o.color; el.style.opacity = 0.4;
+  } else if (o.type === "whiteout") {
+    el.style.background = o.color; el.style.border = "1px dashed #94a3b8";
+  } else if (o.type === "rect") {
+    el.style.border = `${o.width * S()}px solid ${o.color}`;
+  }
+  el.insertAdjacentHTML("beforeend", `<button class="del" title="ลบ">✕</button>` +
+    (o.type === "edit_text" ? "" : `<div class="rs" title="ปรับขนาด"></div>`));
+  layer.appendChild(el); positionObj(o); bindObj(o);
+}
+function styleText(o) {
+  const t = o.el.querySelector(".txt");
+  const size = o.type === "edit_text" ? o.size * o.fit : o.size;
+  Object.assign(t.style, { fontSize: size * S() + "px", color: o.color, fontWeight: o.bold ? "bold" : "normal",
+    fontStyle: o.italic ? "italic" : "normal", textDecoration: o.underline ? "underline" : "none",
+    textAlign: o.align || "left" });
+}
+function positionObj(o) {
+  const [x0, y0, x1, y1] = rectOf(o);
+  let w = x1 - x0, h = y1 - y0;
+  if (o.type === "edit_text") { w = Math.max(w, 30); }
+  Object.assign(o.el.style, { left: x0 * S() + "px", top: y0 * S() + "px", width: w * S() + "px",
+    height: (o.type === "edit_text" ? "auto" : h * S() + "px"), minHeight: h * S() + "px" });
+  if (o.type === "edit_text") o.el.style.minWidth = w * S() + "px";
+}
+function autoGrow(o) {
+  const t = o.el.querySelector(".txt");
+  const need = t.scrollHeight / S();
+  if (need > o.rect[3] - o.rect[1]) { o.rect[3] = o.rect[1] + need + 2; positionObj(o); }
+}
+function select(o) {
+  if (sel && sel.el) sel.el.classList.remove("sel");
+  sel = o; if (o && o.el) o.el.classList.add("sel");
+  if (o && (o.type === "text" || o.type === "edit_text")) {
+    $("#pSize").value = +(o.type === "edit_text" ? o.size * o.fit : o.size).toFixed(1);
+    $("#pColor").value = o.color; setFmt("bold", !!o.bold); setFmt("italic", !!o.italic); setFmt("underline", !!o.underline);
+  }
+}
+function removeObj(o) {
+  o.el && o.el.remove(); o.svg && o.svg.remove();
+  objs = objs.filter(x => x !== o);
+  if (o.type === "edit_text") {
+    const h = layerOf(o.page)?.querySelector(`.hit[data-idx="${o.idx}"]`); if (h) h.classList.remove("done");
+  }
+  if (sel === o) sel = null; updateButtons();
+}
+function bindObj(o) {
+  const el = o.el;
+  el.querySelector(".del").addEventListener("pointerdown", ev => { ev.stopPropagation(); ev.preventDefault(); removeObj(o); });
+  el.addEventListener("pointerdown", ev => {
+    if (ev.target.classList.contains("del")) return;
+    ev.stopPropagation(); select(o);
+    const isResize = ev.target.classList.contains("rs");
+    const editingText = ev.target.classList.contains("txt") && (o.type === "edit_text" || el.classList.contains("editing"));
+    if (editingText) return;
+    if (o.type === "edit_text" && !isResize) return;
+    if (ev.target.classList.contains("txt") && o.type === "text" && ev.detail >= 2) return;
+    ev.preventDefault();
+    const sx = ev.clientX, sy = ev.clientY, r0 = rectOf(o).slice(), pts0 = JSON.stringify(o.paths || o.points || null);
+    const move = e => {
+      const dx = (e.clientX - sx) / S(), dy = (e.clientY - sy) / S();
+      if (isResize) {
+        let w = Math.max(10, r0[2] - r0[0] + dx), h = Math.max(8, r0[3] - r0[1] + dy);
+        if (o.type === "image" && !e.shiftKey) h = w * (r0[3] - r0[1]) / (r0[2] - r0[0]);
+        o.rect = [r0[0], r0[1], r0[0] + w, r0[1] + h];
+      } else {
+        o.rect = [r0[0] + dx, r0[1] + dy, r0[2] + dx, r0[3] + dy];
+        if (o.paths) o.paths = JSON.parse(pts0).map(p => p.map(([x, y]) => [x + dx, y + dy]));
+        if (o.points) o.points = JSON.parse(pts0).map(([x, y]) => [x + dx, y + dy]);
+      }
+      if (o.svg) { const s = o.el.classList.contains("sel"); drawObj(o); if (s) select(o); } else positionObj(o);
+    };
+    const up = () => { removeEventListener("pointermove", move); removeEventListener("pointerup", up); };
+    addEventListener("pointermove", move); addEventListener("pointerup", up);
+  });
+  if (o.type === "text") {
+    el.addEventListener("dblclick", () => { const t = el.querySelector(".txt"); t.focus(); el.classList.add("editing"); });
+  }
+}
+
+/* ---------------- drawing on layers ---------------- */
+function bindLayer(layer, p) {
+  layer.addEventListener("pointerdown", ev => {
+    if (ev.target !== layer) return;
+    const box = layer.getBoundingClientRect();
+    const pt = e => [(e.clientX - box.left) / S(), (e.clientY - box.top) / S()];
+    const [x, y] = pt(ev);
+    select(null);
+    if (tool === "addtext") {
+      const size = +$("#pSize").value || 14;
+      const o = { id: nextId++, type: "text", page: p, rect: [x, y - size * 0.7, Math.min(x + 220, D.pages[p].w - 10), y + size * 0.9],
+        text: "", size, color: $("#pColor").value, ...fmt, align: "left" };
+      objs.push(o); drawObj(o); select(o); updateButtons();
+      setTimeout(() => o.el.querySelector(".txt").focus(), 0);
+      return;
+    }
+    if (!["highlight", "whiteout", "rect", "ink", "line"].includes(tool)) return;
+    ev.preventDefault();
+    const color = $("#pColor").value, width = +$("#pWidth").value || 2;
+    if (tool === "ink") {
+      const o = { id: nextId++, type: "ink", page: p, paths: [[[x, y]]], color, width };
+      objs.push(o); drawObj(o);
+      const move = e => { o.paths[0].push(pt(e)); drawObj(o); };
+      const up = () => { removeEventListener("pointermove", move); removeEventListener("pointerup", up);
+        if (o.paths[0].length < 2) removeObj(o); updateButtons(); };
+      addEventListener("pointermove", move); addEventListener("pointerup", up);
+      return;
+    }
+    const ghost = document.createElement("div"); ghost.className = "drawing"; layer.appendChild(ghost);
+    let end = [x, y];
+    const move = e => {
+      end = pt(e);
+      if (tool === "line") {
+        const len = Math.hypot(end[0] - x, end[1] - y) * S(), ang = Math.atan2(end[1] - y, end[0] - x);
+        Object.assign(ghost.style, { left: x * S() + "px", top: y * S() + "px", width: len + "px", height: "0",
+          transformOrigin: "0 0", transform: `rotate(${ang}rad)` });
+      } else {
+        Object.assign(ghost.style, { left: Math.min(x, end[0]) * S() + "px", top: Math.min(y, end[1]) * S() + "px",
+          width: Math.abs(end[0] - x) * S() + "px", height: Math.abs(end[1] - y) * S() + "px" });
+      }
+    };
+    const up = () => {
+      removeEventListener("pointermove", move); removeEventListener("pointerup", up); ghost.remove();
+      if (Math.hypot(end[0] - x, end[1] - y) < 3) return;
+      const o = tool === "line"
+        ? { id: nextId++, type: "line", page: p, points: [[x, y], end], color, width }
+        : { id: nextId++, type: tool, page: p, color, width,
+            rect: [Math.min(x, end[0]), Math.min(y, end[1]), Math.max(x, end[0]), Math.max(y, end[1])] };
+      objs.push(o); drawObj(o); updateButtons();
+    };
+    addEventListener("pointermove", move); addEventListener("pointerup", up);
+  });
+}
+
+/* ---------------- property bar ---------------- */
+function setFmt(k, v) { fmt[k] = v; $({ bold: "#pBold", italic: "#pItalic", underline: "#pUnder" }[k]).classList.toggle("on", v); }
+[["#pBold", "bold"], ["#pItalic", "italic"], ["#pUnder", "underline"]].forEach(([id, k]) =>
+  $(id).addEventListener("mousedown", ev => {
+    ev.preventDefault(); setFmt(k, !fmt[k]);
+    if (sel && (sel.type === "text" || sel.type === "edit_text")) { sel[k] = fmt[k]; styleText(sel); }
+  }));
+$("#pSize").addEventListener("input", () => {
+  const v = +$("#pSize").value; if (!sel || !v) return;
+  if (sel.type === "text") { sel.size = v; styleText(sel); autoGrow(sel); }
+  if (sel.type === "edit_text") { sel.fit = v / sel.size; styleText(sel); }
+});
+$("#pColor").addEventListener("input", () => {
+  if (!sel) return; sel.color = $("#pColor").value;
+  if (sel.type === "text" || sel.type === "edit_text") styleText(sel); else drawObj(sel), select(sel);
+});
+$("#pWidth").addEventListener("input", () => {
+  if (sel && ["ink", "rect", "line"].includes(sel.type)) { sel.width = +$("#pWidth").value || 1; drawObj(sel); select(sel); }
+});
+
+/* ---------------- image & signature ---------------- */
+function currentPage() {
+  const v = $("#viewer"), mid = v.scrollTop + v.clientHeight / 3;
+  let best = 0;
+  $$(".page").forEach(el => { if (el.offsetTop <= mid) best = +el.dataset.page; });
+  return best;
+}
+function addImage(data, maxW = 220) {
+  const img = new Image();
+  img.onload = () => {
+    const p = currentPage(), pg = D.pages[p];
+    const w = Math.min(maxW, pg.w * 0.6), h = w * img.height / img.width;
+    const v = $("#viewer"), pageEl = document.querySelector(`.page[data-page="${p}"]`);
+    const yView = Math.max(20, (v.scrollTop + v.clientHeight / 2 - pageEl.offsetTop) / S() - h / 2);
+    const x = (pg.w - w) / 2, y = Math.min(pg.h - h - 10, yView);
+    const o = { id: nextId++, type: "image", page: p, rect: [x, y, x + w, y + h], data };
+    objs.push(o); drawObj(o); setTool("select"); select(o); updateButtons();
+    toast("ลากเพื่อย้าย ลากมุมขวาล่างเพื่อปรับขนาด");
+  };
+  img.src = data;
+}
+$("#fImage").addEventListener("change", e => {
+  const f = e.target.files[0]; if (!f) return;
+  const r = new FileReader(); r.onload = () => addImage(r.result); r.readAsDataURL(f); e.target.value = "";
+});
+const pad = $("#sigPad"); let sigCtx, sigDrawn = false;
+function openSig() {
+  dSig.showModal();
+  pad.width = pad.clientWidth * 2; pad.height = pad.clientHeight * 2;
+  sigCtx = pad.getContext("2d"); sigCtx.lineCap = "round"; sigCtx.lineJoin = "round"; sigCtx.lineWidth = 5; sigDrawn = false;
+}
+pad.addEventListener("pointerdown", e => {
+  const b = pad.getBoundingClientRect(), P = ev => [(ev.clientX - b.left) * 2, (ev.clientY - b.top) * 2];
+  sigCtx.strokeStyle = $("#sigColor").value; sigCtx.beginPath(); sigCtx.moveTo(...P(e)); pad.setPointerCapture(e.pointerId);
+  const mv = ev => { sigCtx.lineTo(...P(ev)); sigCtx.stroke(); sigDrawn = true; };
+  const up = () => { pad.removeEventListener("pointermove", mv); pad.removeEventListener("pointerup", up); };
+  pad.addEventListener("pointermove", mv); pad.addEventListener("pointerup", up);
+});
+$("#sigClear").onclick = () => { sigCtx.clearRect(0, 0, pad.width, pad.height); sigDrawn = false; };
+$("#sigOk").onclick = () => {
+  if (!sigDrawn) { toast("กรุณาเซ็นชื่อก่อน", true); return; }
+  // ตัดขอบว่างออก
+  const d = sigCtx.getImageData(0, 0, pad.width, pad.height).data;
+  let x0 = pad.width, y0 = pad.height, x1 = 0, y1 = 0;
+  for (let y = 0; y < pad.height; y++) for (let x = 0; x < pad.width; x++)
+    if (d[(y * pad.width + x) * 4 + 3] > 0) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  const c = document.createElement("canvas"); c.width = x1 - x0 + 20; c.height = y1 - y0 + 20;
+  c.getContext("2d").drawImage(pad, x0 - 10, y0 - 10, c.width, c.height, 0, 0, c.width, c.height);
+  dSig.close(); addImage(c.toDataURL("image/png"), 150);
+};
+
+/* ---------------- save / undo ---------------- */
+function toOps() {
+  return objs.filter(o => !(o.type === "edit_text" && o.text === o.orig && !o.dirtyStyle && o.fit === lineCache[o.page]?.[o.idx]?.fit
+      && o.color === lineCache[o.page]?.[o.idx]?.color && o.bold === lineCache[o.page]?.[o.idx]?.bold && !o.italic && !o.underline))
+    .map(o => {
+      const { el, svg, id, idx, orig, ...rest } = o;
+      return rest;
+    });
+}
+async function save() {
+  const ops = toOps();
+  if (!ops.length) { objs.forEach(o => { o.el && o.el.remove(); o.svg && o.svg.remove(); }); objs = []; updateButtons(); return; }
+  busy(true, "กำลังบันทึก…");
+  try {
+    const info = await json(`/api/doc/${D.id}/apply`, { ops });
+    objs = []; setDoc(info); toast("บันทึกแล้ว");
+  } catch (e) { toast(e.message, true, 5000); }
+  busy(false);
+}
+async function saveIfNeeded() { if (objs.length) await save(); }
+$("#bSave").onclick = save;
+async function undo() {
+  if (objs.length) { removeObj(objs[objs.length - 1]); return; }
+  if (!D.can_undo) return;
+  setDoc(await json(`/api/doc/${D.id}/undo`)); toast("ย้อนกลับแล้ว");
+}
+async function redo() { if (D.can_redo && !objs.length) { setDoc(await json(`/api/doc/${D.id}/redo`)); toast("ทำซ้ำแล้ว"); } }
+$("#bUndo").onclick = undo; $("#bRedo").onclick = redo;
+
+/* ---------------- page operations ---------------- */
+async function pageOp(body, msg) {
+  await saveIfNeeded(); busy(true);
+  try { setDoc(await json(`/api/doc/${D.id}/pages`, body)); toast(msg); } catch (e) { toast(e.message, true, 5000); }
+  busy(false);
+}
+$("#thumbs").addEventListener("click", ev => {
+  const b = ev.target.closest("button"), t = ev.target.closest(".thumb"); if (!t) return;
+  const p = +t.dataset.page;
+  if (!b) { document.querySelector(`.page[data-page="${p}"]`).scrollIntoView({ behavior: "smooth" }); return; }
+  if (b.dataset.a === "rotate") pageOp({ action: "rotate", pages: [p], deg: 90 }, `หมุนหน้า ${p + 1} แล้ว`);
+  if (b.dataset.a === "duplicate") pageOp({ action: "duplicate", page: p }, `ทำสำเนาหน้า ${p + 1} แล้ว`);
+  if (b.dataset.a === "delete" && confirmDelete(p)) pageOp({ action: "delete", pages: [p] }, `ลบหน้า ${p + 1} แล้ว`);
+});
+function confirmDelete(p) { return D.pages.length > 1 || (toast("ลบหน้าสุดท้ายไม่ได้", true), false); }
+let dragFrom = null;
+$("#thumbs").addEventListener("dragstart", e => { const t = e.target.closest(".thumb"); if (t) dragFrom = +t.dataset.page; });
+$("#thumbs").addEventListener("dragover", e => { e.preventDefault(); $$(".thumb").forEach(t => t.classList.remove("drag-over"));
+  e.target.closest(".thumb")?.classList.add("drag-over"); });
+$("#thumbs").addEventListener("drop", e => {
+  e.preventDefault(); $$(".thumb").forEach(t => t.classList.remove("drag-over"));
+  const t = e.target.closest(".thumb"); if (!t || dragFrom === null) return;
+  const to = +t.dataset.page; if (to === dragFrom) return;
+  const order = D.pages.map((_, i) => i); order.splice(to, 0, order.splice(dragFrom, 1)[0]);
+  pageOp({ action: "order", order }, "เรียงหน้าใหม่แล้ว"); dragFrom = null;
+});
+$("#bBlank").onclick = () => pageOp({ action: "blank", after: currentPage() }, "เพิ่มหน้าว่างแล้ว");
+
+/* ---------------- watermark / page numbers ---------------- */
+$("#bWm").onclick = () => dWm.showModal();
+$("#wmOp").oninput = () => $("#wmOpV").textContent = $("#wmOp").value;
+$("#wmOk").onclick = async () => {
+  dWm.close(); await saveIfNeeded(); busy(true, "กำลังใส่ลายน้ำ…");
+  try { setDoc(await json(`/api/doc/${D.id}/watermark`, { text: $("#wmText").value, opacity: $("#wmOp").value / 100,
+    size: +$("#wmSize").value, color: $("#wmColor").value, diagonal: $("#wmDiag").checked })); toast("ใส่ลายน้ำแล้ว"); }
+  catch (e) { toast(e.message, true, 5000); }
+  busy(false);
+};
+$("#bPn").onclick = () => dPn.showModal();
+$("#pnOk").onclick = async () => {
+  dPn.close(); await saveIfNeeded(); busy(true, "กำลังใส่เลขหน้า…");
+  try { setDoc(await json(`/api/doc/${D.id}/pagenumbers`, { format: $("#pnFmt").value, position: $("#pnPos").value,
+    start: +$("#pnStart").value, size: +$("#pnSize").value, thai_digits: $("#pnThai").checked })); toast("ใส่เลขหน้าแล้ว"); }
+  catch (e) { toast(e.message, true, 5000); }
+  busy(false);
+};
+
+/* ---------------- export ---------------- */
+$("#bExport").onclick = ev => {
+  const m = $("#exportMenu"), b = ev.target.getBoundingClientRect();
+  m.style.display = m.style.display === "block" ? "none" : "block";
+  m.style.top = b.bottom + 6 + "px"; m.style.left = Math.max(8, b.right - 260) + "px";
+};
+document.addEventListener("pointerdown", e => { if (!e.target.closest("#exportMenu, #bExport")) $("#exportMenu").style.display = "none"; });
+$$("#exportMenu button").forEach(b => b.onclick = async () => {
+  $("#exportMenu").style.display = "none";
+  await saveIfNeeded();
+  busy(true, b.dataset.fmt === "docx" ? "กำลังแปลงเป็น Word…" : "กำลัง Export…");
+  try {
+    const q = new URLSearchParams({ fmt: b.dataset.fmt, pages: $("#exPages").value.trim() });
+    const r = await api(`/api/doc/${D.id}/export?${q}`);
+    const cd = r.headers.get("Content-Disposition") || "";
+    let name = (cd.match(/filename\*=UTF-8''([^;]+)/i) || [])[1];
+    name = name ? decodeURIComponent(name) : ((cd.match(/filename="?([^";]+)/) || [])[1] || `${D.name}.${b.dataset.fmt}`);
+    const url = URL.createObjectURL(await r.blob());
+    const a = document.createElement("a"); a.href = url; a.download = name; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    toast(`ดาวน์โหลด ${name}`);
+  } catch (e) { toast(e.message, true, 5000); }
+  busy(false);
+});
+
+/* ---------------- open, zoom, keys ---------------- */
+$("#bOpen").onclick = () => { if (objs.length && !confirm("มีการแก้ไขที่ยังไม่บันทึก เปิดไฟล์ใหม่เลยไหม?")) return; $("#fOpen").click(); };
+$("#empty").onclick = () => $("#fOpen").click();
+$("#fOpen").onchange = e => { openFile(e.target.files[0]); e.target.value = ""; };
+$("#bMerge").onclick = () => $("#fMerge").click();
+$("#fMerge").onchange = e => { openFile(e.target.files[0], true); e.target.value = ""; };
+const viewer = $("#viewer");
+["dragenter", "dragover"].forEach(t => viewer.addEventListener(t, e => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); $("#empty").classList.add("over"); } }));
+["dragleave", "drop"].forEach(t => viewer.addEventListener(t, () => $("#empty").classList.remove("over")));
+viewer.addEventListener("drop", e => {
+  if (!e.dataTransfer.files.length) return; e.preventDefault();
+  const f = e.dataTransfer.files[0];
+  if (D && f.type.startsWith("image/") && confirm("ใส่รูปนี้ลงในเอกสาร? (ยกเลิก = เปิดเป็นไฟล์ใหม่)")) {
+    const r = new FileReader(); r.onload = () => addImage(r.result); r.readAsDataURL(f); return;
+  }
+  openFile(f, false);
+});
+function setZoom(z) { zoom = Math.max(0.3, Math.min(3, z)); if (D) render(); }
+$("#zIn").onclick = () => setZoom(zoom * 1.2); $("#zOut").onclick = () => setZoom(zoom / 1.2);
+document.addEventListener("keydown", e => {
+  const typing = e.target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName);
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !typing) { e.preventDefault(); e.shiftKey ? redo() : undo(); }
+  else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y" && !typing) { e.preventDefault(); redo(); }
+  else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); if (D) save(); }
+  else if ((e.key === "Delete" || e.key === "Backspace") && sel && !typing) { e.preventDefault(); removeObj(sel); }
+  else if (e.key === "Escape") { select(null); document.activeElement.blur?.(); }
+});
+viewer.addEventListener("pointerdown", e => { if (!e.target.closest(".obj")) select(null); });
+window.addEventListener("beforeunload", e => { if (objs.length) { e.preventDefault(); e.returnValue = ""; } });
+</script>
+</body>
+</html>

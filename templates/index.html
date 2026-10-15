@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>แปลง PDF เป็น Word (ภาษาไทย)</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #fff; --text: #1d2330; --muted: #6b7280;
+    --line: #e3e6eb; --accent: #2563eb; --accent-soft: #e8efff;
+    --ok: #15803d; --err: #b91c1c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14161b; --card: #1d2027; --text: #e8eaee; --muted: #9aa1ad;
+      --line: #2e323b; --accent: #6b9bff; --accent-soft: #1f2a44; --ok: #4ade80; --err: #f87171; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.6 "Sukhumvit Set", "Thonburi", "Leelawadee UI", "Tahoma", system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 40px 16px 64px; }
+  .topnav { display: flex; gap: 6px; margin-bottom: 22px; }
+  .topnav a { color: var(--muted); text-decoration: none; padding: 7px 14px; border-radius: 9px; border: 1px solid var(--line); background: var(--card); }
+  .topnav a.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+  h1 { font-size: 28px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 28px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 22px; margin-bottom: 18px; }
+  .drop { display: block; border: 2px dashed var(--line); border-radius: 12px; padding: 36px 16px; text-align: center;
+    cursor: pointer; transition: .15s; }
+  .drop.over, .drop:hover { border-color: var(--accent); background: var(--accent-soft); }
+  .drop strong { display: block; font-size: 18px; }
+  .drop span { color: var(--muted); font-size: 14px; }
+  .label { font-weight: 600; margin: 20px 0 8px; display: block; }
+  .modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+  .mode { border: 1px solid var(--line); border-radius: 10px; padding: 12px; cursor: pointer; }
+  .mode input { margin-right: 6px; }
+  .mode b { font-weight: 600; }
+  .mode small { display: block; color: var(--muted); font-size: 13px; line-height: 1.45; margin-top: 4px; }
+  .mode:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+  .check { display: block; margin-top: 14px; font-size: 15px; cursor: pointer; }
+  .check small { color: var(--muted); }
+  select { font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--card); color: var(--text); min-width: 220px; }
+  .hint { color: var(--muted); font-size: 13px; margin-top: 6px; }
+  button { font: inherit; font-weight: 600; background: var(--accent); color: #fff; border: 0;
+    border-radius: 10px; padding: 12px 22px; cursor: pointer; margin-top: 22px; }
+  button:disabled { opacity: .5; cursor: default; }
+  ul { list-style: none; padding: 0; margin: 0; }
+  li { display: flex; gap: 12px; align-items: flex-start; padding: 12px 0; border-top: 1px solid var(--line); }
+  li:first-child { border-top: 0; }
+  .name { flex: 1; min-width: 0; word-break: break-all; }
+  .detail { color: var(--muted); font-size: 13px; word-break: normal; }
+  .status { white-space: nowrap; font-size: 14px; }
+  .status.ok { color: var(--ok); } .status.err { color: var(--err); }
+  .status a { color: var(--accent); font-weight: 600; }
+  .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--line);
+    border-top-color: var(--accent); border-radius: 50%; animation: s 0.8s linear infinite; vertical-align: -2px; }
+  @keyframes s { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<main>
+  <nav class="topnav"><a href="/" class="on">แปลง PDF → Word</a><a href="/editor">แก้ไข PDF / Export</a></nav>
+  <h1>แปลง PDF เป็น Word</h1>
+  <p class="sub">รองรับภาษาไทย ซ่อมสระลอยและวรรณยุกต์ให้อัตโนมัติ ทำงานในเครื่องคุณเท่านั้น ไม่มีไฟล์ส่งออกไปข้างนอก</p>
+
+  <div class="card">
+    <label class="drop" id="drop">
+      <input type="file" id="file" accept="application/pdf,.pdf" multiple hidden>
+      <strong>ลากไฟล์ PDF มาวางที่นี่</strong>
+      <span>หรือคลิกเพื่อเลือกไฟล์ (เลือกได้หลายไฟล์)</span>
+    </label>
+
+    <span class="label">วิธีแปลง</span>
+    <div class="modes">
+      <label class="mode"><input type="radio" name="mode" value="auto" checked><b>อัตโนมัติ</b>
+        <small>ตรวจไฟล์แล้วเลือกวิธีที่เหมาะให้ (แนะนำ)</small></label>
+      <label class="mode"><input type="radio" name="mode" value="text"><b>ดึงข้อความ</b>
+        <small>เก็บตาราง/รูปแบบหน้า ใช้กับ PDF ที่สร้างจาก Word</small></label>
+      <label class="mode"><input type="radio" name="mode" value="ocr"><b>OCR</b>
+        <small>สำหรับไฟล์สแกน หรือข้อความในไฟล์เสีย ช้ากว่า ควรตรวจทาน</small></label>
+      <label class="mode"><input type="radio" name="mode" value="image"><b>รูปภาพ</b>
+        <small>เหมือนต้นฉบับ 100% แต่แก้ไขข้อความไม่ได้</small></label>
+    </div>
+
+    <label class="check"><input type="checkbox" id="dictfix" checked>
+      แก้คำผิดจาก OCR ด้วยพจนานุกรมภาษาไทย <small>(คำที่ถูกแก้จะไฮไลต์สีเหลืองใน Word ให้ตรวจ)</small></label>
+
+    <label class="label" for="font">ฟอนต์ภาษาไทยใน Word</label>
+    <select id="font">
+      <option value="original">ใช้ฟอนต์เดิมจาก PDF</option>
+      {% for f in fonts %}<option value="{{ f }}" {% if loop.first %}selected{% endif %}>{{ f }}</option>{% endfor %}
+    </select>
+    <div class="hint">เครื่องที่เปิดไฟล์ต้องมีฟอนต์นี้ด้วย ถ้าเปิดแล้วสระซ้อนกัน ให้เปลี่ยนเป็น Tahoma (มีในทั้ง Mac และ Windows)</div>
+
+    <button id="go" disabled>แปลงไฟล์</button>
+  </div>
+
+  <div class="card" id="results" hidden><ul id="list"></ul></div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const drop = $("#drop"), input = $("#file"), go = $("#go"), list = $("#list");
+let files = [];
+
+function setFiles(fl) {
+  files = [...fl].filter(f => f.name.toLowerCase().endsWith(".pdf"));
+  go.disabled = !files.length;
+  go.textContent = files.length > 1 ? `แปลง ${files.length} ไฟล์` : "แปลงไฟล์";
+  drop.querySelector("strong").textContent = files.length
+    ? files.map(f => f.name).join(", ") : "ลากไฟล์ PDF มาวางที่นี่";
+}
+input.addEventListener("change", () => setFiles(input.files));
+["dragenter", "dragover"].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", ev => setFiles(ev.dataTransfer.files));
+
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const METHOD = { text: "ดึงข้อความ", ocr: "OCR", image: "รูปภาพ" };
+
+go.addEventListener("click", async () => {
+  go.disabled = true;
+  $("#results").hidden = false;
+  const mode = document.querySelector("input[name=mode]:checked").value;
+  const font = $("#font").value;
+  for (const f of files) {
+    const li = document.createElement("li");
+    li.innerHTML = `<div class="name">${esc(f.name)}<div class="detail">กำลังแปลง… (OCR อาจใช้เวลาหลายนาที)</div></div>
+                    <div class="status"><span class="spin"></span></div>`;
+    list.prepend(li);
+    const fd = new FormData();
+    fd.append("file", f); fd.append("mode", mode); fd.append("font", font);
+    fd.append("dict_fix", $("#dictfix").checked ? "1" : "0");
+    try {
+      const r = await fetch("/convert", { method: "POST", body: fd });
+      if (!r.ok) {
+        let msg = `ผิดพลาด (${r.status})`;
+        try { msg = (await r.json()).error || msg; } catch {}
+        throw new Error(msg);
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const outName = f.name.replace(/\.pdf$/i, "") + ".docx";
+      const detail = decodeURIComponent(r.headers.get("X-Detail") || "");
+      const method = METHOD[r.headers.get("X-Method")] || "";
+      li.querySelector(".detail").textContent = `${method} · ${detail}`;
+      li.querySelector(".status").className = "status ok";
+      li.querySelector(".status").innerHTML = `<a href="${url}" download="${esc(outName)}">ดาวน์โหลด</a>`;
+      const a = document.createElement("a"); a.href = url; a.download = outName; a.click();
+    } catch (e) {
+      li.querySelector(".detail").textContent = e.message;
+      li.querySelector(".status").className = "status err";
+      li.querySelector(".status").textContent = "ไม่สำเร็จ";
+    }
+  }
+  go.disabled = false;
+});
+</script>
+</body>
+</html>
