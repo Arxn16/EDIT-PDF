@@ -6,8 +6,11 @@
   ocr   - อ่านจากภาพด้วย Tesseract (ใช้กับไฟล์สแกน / ข้อความในไฟล์เสีย)
   image - ใส่แต่ละหน้าเป็นรูปภาพ เหมือนต้นฉบับ 100% แต่แก้ข้อความไม่ได้
 """
+import copy
 import io
 import re
+import statistics
+import unicodedata
 
 import pymupdf as fitz
 import pytesseract
@@ -292,8 +295,18 @@ def _restore_spaces(root, pairs, known):
     """pdf2docx บางครั้งแยกบรรทัดเป็นหลาย run แล้วทิ้งช่องว่างระหว่าง run ทำให้คำติดกัน
     คืนช่องว่างเมื่อใน PDF ต้นฉบับสองคำนั้นมีช่องว่างคั่นจริง"""
     for para in root.iter(qn("w:p")):
-        ts = [t for t in para.iter(qn("w:t")) if t.text]
-        for prev, cur in zip(ts, ts[1:]):
+        # คู่ข้อความที่อยู่บรรทัดเดียวกันเท่านั้น (ข้าม <w:br/> หรือแท็บ = ขึ้นบรรทัดใหม่/เว้นระยะอยู่แล้ว
+        # ถ้าใส่ช่องว่างตรงนั้น บรรทัดถัดไปจะเยื้องขวา 1 ช่องว่าง)
+        ts, prev_t = [], None
+        for el in para.iter(qn("w:t"), qn("w:br"), qn("w:cr"), qn("w:tab")):
+            if el.tag == qn("w:t"):
+                if el.text:
+                    if prev_t is not None:
+                        ts.append((prev_t, el))
+                    prev_t = el
+            else:
+                prev_t = None
+        for prev, cur in ts:
             if prev.text[-1].isspace() or cur.text[0].isspace():
                 continue
             tail, head = prev.text.split()[-1], cur.text.split()[0]
@@ -651,6 +664,216 @@ def _norm(t):
     return re.sub(r"\s+", "", fix_thai(t)).translate(_NORM_DIGITS)
 
 
+# ---------------------------------------------------------------------------
+# จัดบรรทัดให้ตรง PDF: ตำแหน่งเริ่มบรรทัด และระยะห่างตัวอักษร (บรรทัดที่ต้นฉบับบีบตัวอักษรให้พอดีบรรทัด)
+# ---------------------------------------------------------------------------
+
+def _line_key(t):
+    t = re.sub(r"\s+", "", fix_thai(t)).translate(_NORM_DIGITS)
+    return t.replace("\u0e33", "\u0e32").replace("\u0e4d", "")
+
+
+def _pdf_line_info(pdf_path):
+    """{หน้า: [(key, x ตัวอักษรแรก, ระยะบีบ/ขยายตัวอักษร, x ท้ายบรรทัด)]} (หน่วย pt) ตามลำดับในหน้า"""
+    out = {}
+    with fitz.open(pdf_path) as pdf:
+        for pno, page in enumerate(pdf):
+            items = []
+            for b in page.get_text("rawdict")["blocks"]:
+                for ln in b.get("lines", []):
+                    d = ln.get("dir", (1, 0))
+                    if abs(d[0] - 1) > 0.01 or abs(d[1]) > 0.01:
+                        continue
+                    chars = [c for sp in ln["spans"] for c in sp["chars"]]
+                    ink = [c for c in chars if not c["c"].isspace()]
+                    if not ink:
+                        continue
+                    key = _line_key("".join(c["c"] for c in chars))
+                    if len(key) < 2:
+                        continue
+                    gaps = []
+                    for a, c in zip(chars, chars[1:]):
+                        if a["c"].isspace() or c["c"].isspace() or abs(c["origin"][1] - a["origin"][1]) > 0.5 \
+                                or unicodedata.category(a["c"])[0] == "M" or unicodedata.category(c["c"])[0] == "M":
+                            continue
+                        gaps.append(c["origin"][0] - a["origin"][0] - (a["bbox"][2] - a["bbox"][0]))
+                    tc = 0.0
+                    if len(gaps) >= 8:
+                        med = statistics.median(gaps)
+                        if abs(med) >= 0.1 and sum(abs(g - med) <= 0.08 for g in gaps) >= 0.7 * len(gaps):
+                            tc = med
+                    items.append((key, ink[0]["bbox"][0], tc, ink[-1]["bbox"][2]))
+            out[pno] = items
+    return out
+
+
+def _page_groups(doc):
+    """[(องค์ประกอบในหน้า, sectPr ของหน้า)] (pdf2docx: 1 หน้า PDF = 1 section)"""
+    groups, cur = [], []
+    body = doc.element.body
+    for child in body:
+        if child.tag == qn("w:sectPr"):
+            continue
+        cur.append(child)
+        sp = child.find(qn("w:pPr") + "/" + qn("w:sectPr")) if child.tag == qn("w:p") else None
+        if sp is not None:
+            groups.append((cur, sp))
+            cur = []
+    if cur:
+        groups.append((cur, body.find(qn("w:sectPr"))))
+    return groups
+
+
+def _split_lines(p):
+    """แบ่งย่อหน้าเป็นบรรทัดตาม <w:br/> คืน None ถ้าโครงสร้างซับซ้อน (ไม่แตะ)"""
+    lines = [{"lead": [], "runs": [], "text": "", "mid": False}]
+    for r in p.iter(qn("w:r")):
+        if next(r.iterancestors(qn("w:p")), None) is not p:
+            continue
+        kids = [c for c in r if c.tag != qn("w:rPr")]
+        tags = {c.tag for c in kids}
+        cur = lines[-1]
+        if tags & {qn("w:br"), qn("w:cr")}:
+            if tags - {qn("w:br"), qn("w:cr")} or any(c.get(qn("w:type")) not in (None, "textWrapping") for c in kids):
+                return None
+            lines.append({"lead": [], "runs": [], "text": "", "mid": False})
+            continue
+        if tags == {qn("w:tab")}:
+            if cur["text"].strip():
+                cur["mid"] = True
+            else:
+                cur["lead"].append(r)
+            continue
+        if qn("w:tab") in tags:
+            cur["mid"] = True
+        if qn("w:t") in tags:
+            cur["runs"].append(r)
+            cur["text"] += "".join(t.text or "" for t in r.findall(qn("w:t")))
+    return lines
+
+
+def _tab_run(like):
+    r = OxmlElement("w:r")
+    rpr = like.find(qn("w:rPr")) if like is not None else None
+    if rpr is not None:
+        r.append(copy.deepcopy(rpr))
+    r.append(OxmlElement("w:tab"))
+    return r
+
+
+def _retab(p, lines, xs, margin_tw):
+    """ตั้งแท็บใหม่ให้ทุกบรรทัดเริ่มตรงตำแหน่งใน PDF (แท็บวัดจากขอบกระดาษซ้าย)"""
+    ppr = p.find(qn("w:pPr"))
+    if ppr is None:
+        return False
+    jc = ppr.find(qn("w:jc"))
+    if jc is not None and jc.get(qn("w:val")) not in ("left", "start"):   # จัดกลาง/ขวา/เต็มบรรทัด: แท็บใช้ไม่ได้ตรง
+        return False
+    ind = ppr.find(qn("w:ind"))
+    base = 0
+    if ind is not None:
+        if any(int(float(ind.get(qn(a)) or 0)) for a in ("w:firstLine", "w:hanging")):
+            return False
+        base = int(float(ind.get(qn("w:left")) or ind.get(qn("w:start")) or 0))
+    targets = [round(x * 20) - margin_tw for x in xs]
+    if any(t < base - 30 for t in targets):
+        return False
+    stops = []
+    for t in sorted(t for t in targets if t > base + 20):
+        if not stops or t - stops[-1][-1] > 12:
+            stops.append([t])
+        else:
+            stops[-1].append(t)
+    pos = [round(sum(c) / len(c)) for c in stops]
+    for ln, t in zip(lines, targets):
+        k = 0 if t <= base + 20 else next(i + 1 for i, c in enumerate(stops) if t in c)
+        first = ln["runs"][0]
+        like = ln["lead"][0] if ln["lead"] else first
+        for r in ln["lead"]:
+            r.getparent().remove(r)
+        for _ in range(k):
+            first.addprevious(_tab_run(like))
+        t0 = first.find(qn("w:t"))                       # ช่องว่างนำหน้า -> ใช้แท็บวางตำแหน่งแทน
+        if t0 is not None and t0.text:
+            t0.text = t0.text.lstrip(" ")
+    old = ppr.find(qn("w:tabs"))
+    if old is not None:
+        ppr.remove(old)
+    if pos:
+        tabs = OxmlElement("w:tabs")
+        for v in pos:
+            tab = OxmlElement("w:tab")
+            tab.set(qn("w:val"), "left")
+            tab.set(qn("w:pos"), str(v))
+            tabs.append(tab)
+        ppr.append(tabs)                                   # ลำดับที่ถูกต้องจัดให้ตอน finalize_docx
+    return True
+
+
+def _uncenter(p):
+    ppr = p.find(qn("w:pPr"))
+    jc = ppr.find(qn("w:jc")) if ppr is not None else None
+    if jc is None or jc.get(qn("w:val")) != "center":
+        return
+    jc.set(qn("w:val"), "left")
+    ind = ppr.find(qn("w:ind"))
+    if ind is not None:
+        for a in ("w:right", "w:end"):
+            if ind.get(qn(a)) is not None:
+                ind.set(qn(a), "0")
+
+
+def _align_with_pdf(doc, pdf_path):
+    """ให้แต่ละบรรทัดใน Word เริ่มตรงตำแหน่งเดียวกับ PDF และบีบตัวอักษรเท่าต้นฉบับ
+    (pdf2docx ใส่จำนวนแท็บผิดในบางบรรทัด และไม่เก็บค่าการบีบตัวอักษร ทำให้บรรทัดยาวเกินแล้วตกบรรทัด)"""
+    info = _pdf_line_info(pdf_path)
+    stats = {"retab": 0, "spacing": 0}
+    for pno, (elems, sect) in enumerate(_page_groups(doc)):
+        items = info.get(pno)
+        if not items:
+            continue
+        used = [False] * len(items)
+        mar = sect.find(qn("w:pgMar")) if sect is not None else None
+        margin_tw = int(float(mar.get(qn("w:left")) or 0)) if mar is not None else None
+        for el in elems:
+            for p in el.iter(qn("w:p")):
+                lines = _split_lines(p)
+                if lines is None:
+                    continue
+                lines = [ln for ln in lines if ln["text"].strip() and ln["runs"]]
+                xs, ends, ok = [], [], bool(lines)
+                for ln in lines:
+                    key = _line_key(ln["text"])
+                    k = next((i for i, it in enumerate(items) if not used[i] and it[0] == key), None)
+                    if k is None:
+                        ok = False
+                        continue
+                    used[k] = True
+                    xs.append(items[k][1])
+                    ends.append(items[k][3])
+                    tc = items[k][2]
+                    if tc:
+                        val = str(max(-40, min(40, round(tc * 20))))
+                        for r in ln["runs"]:
+                            rpr = r.find(qn("w:rPr"))
+                            if rpr is None:
+                                rpr = OxmlElement("w:rPr")
+                                r.insert(0, rpr)
+                            sp = rpr.find(qn("w:spacing"))
+                            if sp is None:
+                                sp = OxmlElement("w:spacing")
+                                rpr.append(sp)
+                            sp.set(qn("w:val"), val)
+                        stats["spacing"] += 1
+                in_table = next(p.iterancestors(qn("w:tbl")), None) is not None
+                if ok and not in_table and len(xs) >= 2 and max(xs) - min(xs) < 1.0 and max(ends) - min(ends) > 4.0:
+                    _uncenter(p)          # pdf2docx เดาว่าจัดกลาง แต่ใน PDF ทุกบรรทัดเริ่มตรงกัน = ชิดซ้าย
+                if ok and margin_tw is not None and not in_table and not any(ln["mid"] for ln in lines) \
+                        and len(xs) == len(lines) and _retab(p, lines, xs, margin_tw):
+                    stats["retab"] += 1
+    return stats
+
+
 def _restore_lines(doc, orphans):
     """ใส่เส้นที่หายกลับเป็นรูปเส้นตรง: ยึดกับบรรทัดข้อความที่อยู่เหนือเส้น (ขยับตามข้อความ)
     ถ้าหาบรรทัดไม่เจอ ยึดกับตำแหน่งบนหน้าแทน"""
@@ -797,6 +1020,10 @@ def convert_text(pdf_path, out_path, font, lost_am=True):
                 _fix_boundary(prev, cur, lost_am)
     _restore_lines(doc, orphans)
     _apply_double_borders(doc, doubles)
+    try:
+        _align_with_pdf(doc, pdf_path)
+    except Exception:  # noqa: BLE001
+        pass
     _shrink_empty_headers(doc)
     apply_thai_font(doc, font)
     finalize_docx(doc)

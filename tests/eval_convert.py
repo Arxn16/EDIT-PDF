@@ -5,6 +5,7 @@
   - เส้นตาราง: ความยาวรวมของเส้นแนวนอน/แนวตั้ง
   - พื้นหลังสี (shading): พื้นที่รวมแยกตามสี
   - ตำแหน่งเส้นตาราง: เส้นแนวตั้งเลื่อนจากต้นฉบับกี่ pt (ตารางเยื้องซ้าย/ขวา)
+  - ตำแหน่งบรรทัด: ทุกบรรทัดอยู่ที่เดิมไหม (ตกบรรทัด/เยื้องผิด/เลื่อนลง)
   - ไฟล์ Word ถูกต้องตามมาตรฐาน: ไม่มีค่าที่ Word อ่านไม่ได้ (ทศนิยม, สี #xxxxxx),
     ลำดับ element ถูกต้อง, ไม่มี element ซ้ำ, ใช้ w:left/w:right แบบที่ Word เขียนเอง
 
@@ -96,6 +97,43 @@ def _vsegs(page):
     return out
 
 
+def _line_key(t):
+    return re.sub(r"\s+", "", fix_thai(t)).translate(str.maketrans("๐๑๒๓๔๕๖๗๘๙", "0123456789")) \
+        .replace("\u0e33", "\u0e32").replace("\u0e4d", "")
+
+
+def _text_lines(page):
+    out = []
+    for b in page.get_text("rawdict")["blocks"]:
+        for ln in b.get("lines", []):
+            chars = [c for sp in ln["spans"] for c in sp["chars"]]
+            ink = [c for c in chars if not c["c"].isspace()]
+            if ink:
+                key = _line_key("".join(c["c"] for c in chars))
+                if len(key) >= 2:
+                    out.append((key, ink[0]["origin"][0], ink[0]["origin"][1]))
+    return out
+
+
+def line_positions(o, b):
+    """(บรรทัดที่อยู่ที่เดิม, ทั้งหมด, คลาดแนวนอนสูงสุด, คลาดแนวตั้งสูงสุด) บรรทัดที่ข้อความไม่ตรงกัน = ตกบรรทัด"""
+    total = ok = 0
+    mx = my = 0.0
+    for po, pb in zip(o, b):
+        lb, used = _text_lines(pb), set()
+        for key, x, y in _text_lines(po):
+            total += 1
+            cands = [k for k in range(len(lb)) if k not in used and lb[k][0] == key]
+            if not cands:
+                continue
+            k = min(cands, key=lambda k: abs(lb[k][2] - y))
+            used.add(k)
+            dx, dy = abs(lb[k][1] - x), abs(lb[k][2] - y)
+            mx, my = max(mx, dx), max(my, dy)
+            ok += dx <= 1.5 and dy <= 3.0
+    return ok, total, round(mx, 1), round(my, 1)
+
+
 def vline_offset(o, b):
     """ระยะเลื่อนแนวนอนของเส้นตั้ง (ค่ามัธยฐาน pt) ระหว่างต้นฉบับกับไฟล์ที่แปลงกลับ"""
     dx = []
@@ -146,6 +184,7 @@ def evaluate(pdf, font=None, keep=None):
         "v_lines": (round(ov), round(bv), round(100 * min(ov, bv) / ov) if ov else 100),
         "shading": (round(sum(osh.values())), round(sum(bsh.values()))),
         "vline_dx": vline_offset(o, b),
+        "lines": line_positions(o, b),
         "words_missing": sum(miss.values()), "words_extra": sum(extra.values()), "words_total": total,
         "docx_invalid": dict(docx_problems(docx)), "method": info["method"],
         "schema_errors": _schema_errors(docx),
@@ -166,6 +205,8 @@ if __name__ == "__main__":
         print(f"   เส้นแนวตั้ง  ต้นฉบับ {r['v_lines'][0]} pt  หลังแปลง {r['v_lines'][1]} pt  ({r['v_lines'][2]}%)")
         print(f"   พื้นหลังสี   ต้นฉบับ {r['shading'][0]}  หลังแปลง {r['shading'][1]}")
         print(f"   ตำแหน่งเส้นตั้งเลื่อน {r['vline_dx']} pt")
+        ok, tot, mx, my = r["lines"]
+        print(f"   บรรทัดอยู่ที่เดิม {ok}/{tot} (คลาดแนวนอนสูงสุด {mx} pt, แนวตั้ง {my} pt)")
         print(f"   คำหาย {r['words_missing']} / เกิน {r['words_extra']} จาก {r['words_total']}  {r['top_missing']}")
         print(f"   ค่าที่ Word อ่านไม่ได้ใน .docx: {r['docx_invalid'] or 'ไม่มี'}")
         if r["schema_errors"] is not None:
